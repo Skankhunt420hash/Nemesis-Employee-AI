@@ -60,6 +60,14 @@
   <label>Schl&uuml;ssel <span style="text-transform:none;letter-spacing:0">(bei Ollama leer lassen)</span></label>
   <input id="nxKey" type="password" placeholder="sk-...">
 
+  <div style="height:1px;background:#26263F;margin:28px 0 4px"></div>
+  <h2 style="margin-top:20px">Cloud-Speicher</h2>
+  <p>Damit deine Agenten auf jedem Ger&auml;t gleich sind. Ohne das liegen sie nur in diesem Browser. Die Adresse ist dein Sync-Server auf dem Droplet.</p>
+  <label>Cloud-Adresse</label>
+  <input id="nxCloudUrl" placeholder="https://sync.nemesis-studio-ai.ch">
+  <label>Raum-Name <span style="text-transform:none;letter-spacing:0">(dein privater Schl&uuml;ssel)</span></label>
+  <input id="nxCloudRaum" placeholder="nemesis">
+
   <div class="row">
     <button class="b" onclick="NX.save()">Speichern</button>
     <button class="b g" onclick="NX.close()">Schlie&szlig;en</button>
@@ -88,6 +96,8 @@ window.NX = {
   cfg(){ try { return JSON.parse(localStorage.getItem("nx:cfg")||"{}"); } catch(e){ return {}; } },
   open(){ const c=this.cfg();
     nxEndpoint.value=c.endpoint||""; nxModel.value=c.model||""; nxKey.value=c.key||"";
+    var cl={}; try{ cl=JSON.parse(localStorage.getItem("nx:cloud")||"{}"); }catch(e){}
+    nxCloudUrl.value=cl.url||""; nxCloudRaum.value=cl.raum||"";
     document.getElementById("nxset").style.display="block"; },
   close(){ document.getElementById("nxset").style.display="none"; },
   preset(p){
@@ -105,7 +115,11 @@ window.NX = {
     localStorage.setItem("nx:cfg", JSON.stringify({
       endpoint:nxEndpoint.value.trim(), model:nxModel.value.trim(), key:nxKey.value.trim()
     }));
+    localStorage.setItem("nx:cloud", JSON.stringify({
+      url:nxCloudUrl.value.trim(), raum:(nxCloudRaum.value.trim()||"nemesis")
+    }));
     this.close();
+    location.reload();
   },
   exportAll(){
     const d={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k!=="nx:cfg") d[k]=localStorage.getItem(k);}
@@ -434,6 +448,43 @@ async function saveState(s) {
   return true;
 }
 
+/* ---------- Cloud-Sync (zentral auf dem Droplet) ---------- */
+function cloudCfg() {
+  try { return JSON.parse(localStorage.getItem("nx:cloud") || "{}"); } catch (e) { return {}; }
+}
+function setCloudCfg(c) { localStorage.setItem("nx:cloud", JSON.stringify(c)); }
+
+async function cloudLoad() {
+  const c = cloudCfg();
+  if (!c.url) return null;
+  const base = c.url.replace(/\/$/, "");
+  const raum = encodeURIComponent(c.raum || "nemesis");
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const r = await fetch(base + "/state?raum=" + raum, { signal: ctrl.signal });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d && (d.agents || d.activity || d.models) ? d : null;
+  } catch (e) { return null; } finally { clearTimeout(t); }
+}
+
+async function cloudSave(state) {
+  const c = cloudCfg();
+  if (!c.url) return false;
+  const base = c.url.replace(/\/$/, "");
+  const raum = encodeURIComponent(c.raum || "nemesis");
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const r = await fetch(base + "/state?raum=" + raum, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state), signal: ctrl.signal,
+    });
+    return r.ok;
+  } catch (e) { return false; } finally { clearTimeout(t); }
+}
+
 const newAgent = (o) => ({
   id: "ag_" + Date.now() + "_" + Math.floor(Math.random() * 999),
   xp: 20, chat: [], skills: [], trainings: 0, generation: 1, lineage: [],
@@ -503,7 +554,8 @@ function NemesisLab() {
 
   useEffect(() => {
     (async () => {
-      const s = await loadState();
+      let s = await cloudLoad();          // erst zentral vom Server
+      if (!s) s = await loadState();       // sonst lokal als Rückfall
       if (s) {
         setAgents((s.agents || []).map((a) => ({ ...newAgent({}), ...a })));
         setActivity(s.activity || []);
@@ -524,8 +576,12 @@ function NemesisLab() {
     if (nextModels) setModels(nextModels);
     if (nextDroplet) setDroplet(nextDroplet);
     setSync("saving");
-    try { await saveState({ agents: nextAgents, activity: act, models: ms, droplet: dp }); setSync("ok"); }
-    catch (e) { setSync("bad"); }
+    const zustand = { agents: nextAgents, activity: act, models: ms, droplet: dp };
+    let okLokal = false, okCloud = false;
+    try { await saveState(zustand); okLokal = true; } catch (e) {}
+    okCloud = await cloudSave(zustand);
+    const hatCloud = !!cloudCfg().url;
+    setSync(okCloud ? "cloud" : (okLokal ? (hatCloud ? "lokal" : "ok") : "bad"));
   };
 
   const upd = (id, patch, note) => commit(agents.map((a) => (a.id === id ? { ...a, ...patch } : a)), note);
