@@ -44,21 +44,30 @@
   <select id="nxPreset" onchange="NX.preset(this.value)">
     <option value="">— ausw&auml;hlen —</option>
     <option value="anthropic">Anthropic · Claude</option>
-    <option value="openai">OpenAI</option>
-    <option value="groq">Groq</option>
-    <option value="openrouter">OpenRouter</option>
-    <option value="ollama">Ollama lokal</option>
+    <option value="openai">OpenAI · GPT</option>
+    <option value="groq">Groq 🆓 (gratis)</option>
+    <option value="openrouter">OpenRouter (gratis + bezahlt)</option>
+    <option value="gemini">Google Gemini</option>
+    <option value="mistral">Mistral AI</option>
+    <option value="cohere">Cohere</option>
+    <option value="together">Together AI</option>
+    <option value="ollama">Ollama lokal (kein Key)</option>
+    <option value="lmstudio">LM Studio lokal (kein Key)</option>
     <option value="proxy">Eigener Proxy · Droplet</option>
   </select>
 
-  <label>Endpunkt</label>
-  <input id="nxEndpoint" placeholder="https://api.anthropic.com/v1/messages">
-
   <label>Modell</label>
-  <input id="nxModel" placeholder="claude-sonnet-4-6">
+  <select id="nxModelSelect" onchange="NX.pickModel(this.value)" style="margin-bottom:6px">
+    <option value="">— zuerst Anbieter w&auml;hlen —</option>
+  </select>
+  <input id="nxModel" placeholder="oder manuell eingeben..." style="margin-top:0">
 
-  <label>Schl&uuml;ssel <span style="text-transform:none;letter-spacing:0">(bei Ollama leer lassen)</span></label>
+  <label>API-Schl&uuml;ssel <span style="text-transform:none;letter-spacing:0;color:#aaa">(bei Ollama/LM Studio leer lassen)</span></label>
   <input id="nxKey" type="password" placeholder="sk-...">
+  <div id="nxKeyHint" style="font-size:12px;color:#FFD23F;margin-top:4px;display:none"></div>
+
+  <label style="margin-top:16px">Endpunkt <span style="text-transform:none;letter-spacing:0;color:#aaa">(automatisch gef&uuml;llt)</span></label>
+  <input id="nxEndpoint" placeholder="https://api.anthropic.com/v1/messages">
 
   <div style="height:1px;background:#26263F;margin:28px 0 4px"></div>
   <h2 style="margin-top:20px">Cloud-Speicher</h2>
@@ -96,21 +105,129 @@ window.NX = {
   cfg(){ try { return JSON.parse(localStorage.getItem("nx:cfg")||"{}"); } catch(e){ return {}; } },
   open(){ const c=this.cfg();
     nxEndpoint.value=c.endpoint||""; nxModel.value=c.model||""; nxKey.value=c.key||"";
+    var ms=document.getElementById("nxModelSelect"); if(ms){ms.innerHTML="<option value=''>"+(c.model?"Gespeichert: "+c.model:"— Anbieter wählen →")+"</option>";}
+    var kh=document.getElementById("nxKeyHint"); if(kh) kh.style.display="none";
     var cl={}; try{ cl=JSON.parse(localStorage.getItem("nx:cloud")||"{}"); }catch(e){}
     nxCloudUrl.value=cl.url||""; nxCloudRaum.value=cl.raum||"";
     document.getElementById("nxset").style.display="block"; },
   close(){ document.getElementById("nxset").style.display="none"; },
-  preset(p){
-    const P={
-      anthropic:["https://api.anthropic.com/v1/messages","claude-sonnet-4-6"],
-      openai:["https://api.openai.com/v1/chat/completions","gpt-4o"],
-      groq:["https://api.groq.com/openai/v1/chat/completions","llama-3.3-70b-versatile"],
-      openrouter:["https://openrouter.ai/api/v1/chat/completions","deepseek/deepseek-chat"],
-      ollama:["http://localhost:11434/v1/chat/completions","qwen3.6:9b"],
-      proxy:["http://localhost:3333/v1/chat/completions","auto"]
-    };
-    if(P[p]){ nxEndpoint.value=P[p][0]; nxModel.value=P[p][1]; }
+  PROVIDERS:{
+    anthropic:{
+      url:"https://api.anthropic.com/v1/messages",
+      hint:"Key holen: console.anthropic.com → API Keys. Ab $5 Guthaben nutzbar.",
+      models:[
+        {v:"claude-sonnet-4-6",l:"Claude Sonnet 4.6 ⭐"},
+        {v:"claude-haiku-4-5",l:"Claude Haiku 4.5 (schnell & günstig)"},
+        {v:"claude-opus-4-6",l:"Claude Opus 4.6 (stärkst)"}
+      ]
+    },
+    openai:{
+      url:"https://api.openai.com/v1/chat/completions",
+      hint:"Key holen: platform.openai.com → API Keys. Ab $5 Guthaben.",
+      models:[
+        {v:"gpt-4o",l:"GPT-4o ⭐"},
+        {v:"gpt-4o-mini",l:"GPT-4o mini (günstig)"},
+        {v:"gpt-4.1",l:"GPT-4.1"},
+        {v:"o4-mini",l:"o4-mini (Denk-Modell)"}
+      ]
+    },
+    groq:{
+      url:"https://api.groq.com/openai/v1/chat/completions",
+      hint:"🆓 GRATIS! Key holen: console.groq.com → API Keys. Kein Guthaben nötig.",
+      models:[
+        {v:"llama-3.3-70b-versatile",l:"Llama 3.3 70B 🆓 ⭐"},
+        {v:"llama-3.1-8b-instant",l:"Llama 3.1 8B 🆓 (schnell)"},
+        {v:"mixtral-8x7b-32768",l:"Mixtral 8x7B 🆓"},
+        {v:"gemma2-9b-it",l:"Gemma 2 9B 🆓"},
+        {v:"llama-3.3-70b-specdec",l:"Llama 3.3 70B SpecDec 🆓"}
+      ]
+    },
+    openrouter:{
+      url:"https://openrouter.ai/api/v1/chat/completions",
+      hint:"Key holen: openrouter.ai → Keys. Viele gratis Modelle (markiert mit :free).",
+      models:[
+        {v:"meta-llama/llama-3.3-70b-instruct:free",l:"Llama 3.3 70B 🆓"},
+        {v:"google/gemma-3-27b-it:free",l:"Gemma 3 27B 🆓"},
+        {v:"qwen/qwen3-coder:free",l:"Qwen3 Coder 🆓"},
+        {v:"deepseek/deepseek-chat",l:"DeepSeek V3 (günstig)"},
+        {v:"anthropic/claude-sonnet-4-6",l:"Claude Sonnet (via OR)"},
+        {v:"openai/gpt-4o",l:"GPT-4o (via OR)"},
+        {v:"google/gemini-2.5-flash",l:"Gemini 2.5 Flash (via OR)"}
+      ]
+    },
+    gemini:{
+      url:"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      hint:"Key holen: aistudio.google.com → Get API Key. Gratis-Tier verfügbar!",
+      models:[
+        {v:"gemini-2.5-flash",l:"Gemini 2.5 Flash ⭐ (gratis-Tier)"},
+        {v:"gemini-2.5-pro",l:"Gemini 2.5 Pro"},
+        {v:"gemini-2.0-flash",l:"Gemini 2.0 Flash (gratis-Tier)"}
+      ]
+    },
+    mistral:{
+      url:"https://api.mistral.ai/v1/chat/completions",
+      hint:"Key holen: console.mistral.ai → API Keys. Gratis-Tier für kleine Nutzung.",
+      models:[
+        {v:"mistral-large-latest",l:"Mistral Large ⭐"},
+        {v:"mistral-small-latest",l:"Mistral Small (günstig)"},
+        {v:"open-mistral-nemo",l:"Mistral Nemo 🆓 (gratis)"},
+        {v:"codestral-latest",l:"Codestral (Code)"}
+      ]
+    },
+    cohere:{
+      url:"https://api.cohere.com/v2/chat",
+      hint:"Key holen: dashboard.cohere.com → API Keys. Trial-Key gratis verfügbar.",
+      models:[
+        {v:"command-r-plus-08-2024",l:"Command R+ ⭐"},
+        {v:"command-r-08-2024",l:"Command R (günstig)"}
+      ]
+    },
+    together:{
+      url:"https://api.together.xyz/v1/chat/completions",
+      hint:"Key holen: api.together.ai → Settings → API Keys. $1 Startguthaben gratis.",
+      models:[
+        {v:"meta-llama/Llama-3.3-70B-Instruct-Turbo",l:"Llama 3.3 70B Turbo ⭐"},
+        {v:"mistralai/Mixtral-8x7B-Instruct-v0.1",l:"Mixtral 8x7B"},
+        {v:"Qwen/Qwen2.5-72B-Instruct-Turbo",l:"Qwen 2.5 72B"}
+      ]
+    },
+    ollama:{
+      url:"http://localhost:11434/v1/chat/completions",
+      hint:"Ollama läuft lokal auf deinem PC. Kein Key nötig. ollama.com zum installieren.",
+      models:[
+        {v:"llama3.3",l:"Llama 3.3"},
+        {v:"qwen2.5:14b",l:"Qwen 2.5 14B"},
+        {v:"gemma3:9b",l:"Gemma 3 9B"},
+        {v:"mistral",l:"Mistral 7B"}
+      ]
+    },
+    lmstudio:{
+      url:"http://localhost:1234/v1/chat/completions",
+      hint:"LM Studio läuft lokal. Kein Key nötig. lmstudio.ai zum installieren.",
+      models:[
+        {v:"local-model",l:"(Aktives Modell in LM Studio)"}
+      ]
+    },
+    proxy:{
+      url:"http://localhost:3333/v1/chat/completions",
+      hint:"Eigener Proxy oder Nemesis-Droplet. URL anpassen falls nötig.",
+      models:[
+        {v:"auto",l:"auto (Proxy wählt)"}
+      ]
+    }
   },
+  preset(p){
+    const pr=this.PROVIDERS[p]; if(!pr) return;
+    nxEndpoint.value=pr.url;
+    const hint=document.getElementById("nxKeyHint");
+    hint.textContent=pr.hint; hint.style.display="block";
+    const sel=document.getElementById("nxModelSelect");
+    sel.innerHTML=pr.models.map(m=>`<option value="${m.v}">${m.l}</option>`).join("");
+    if(pr.models.length>0){ nxModel.value=pr.models[0].v; }
+    const noKey=["ollama","lmstudio"];
+    document.getElementById("nxKey").placeholder=noKey.includes(p)?"(nicht nötig)":"sk-... / API Key eingeben";
+  },
+  pickModel(v){ if(v) nxModel.value=v; },
   save(){
     localStorage.setItem("nx:cfg", JSON.stringify({
       endpoint:nxEndpoint.value.trim(), model:nxModel.value.trim(), key:nxKey.value.trim()
@@ -355,23 +472,55 @@ const valueOf = (a) => {
 };
 
 /* ---------- API ---------- */
+// PROXY_URL: Wenn gesetzt, werden alle nicht-Anthropic Anfragen über den Sync-Server geleitet
+// Das löst CORS-Probleme mit OpenAI, Groq, Gemini, Mistral etc.
+function getProxyUrl() {
+  try {
+    const cl = JSON.parse(localStorage.getItem("nx:cloud") || "{}");
+    if (cl.url && cl.url.indexOf("localhost") < 0) return cl.url + "/proxy";
+  } catch(e) {}
+  return null;
+}
+
 async function ask(messages, system, maxTokens = 1200) {
   const cfg = window.NX.cfg();
   if (!cfg.endpoint) throw new Error("Kein Modell eingerichtet - tippe unten rechts auf das Zahnrad.");
-  if (!cfg.key && cfg.endpoint.indexOf("localhost") < 0 && cfg.endpoint.indexOf("127.0.0.1") < 0)
-    throw new Error("Kein Schluessel hinterlegt - tippe unten rechts auf das Zahnrad.");
+  const isLocal = cfg.endpoint.indexOf("localhost") > -1 || cfg.endpoint.indexOf("127.0.0.1") > -1;
+  if (!cfg.key && !isLocal) throw new Error("Kein Schluessel hinterlegt - tippe unten rechts auf das Zahnrad.");
+
   const anthropic = cfg.endpoint.indexOf("anthropic") > -1;
-  const headers = { "Content-Type": "application/json" };
+  const proxyUrl = !anthropic && !isLocal ? getProxyUrl() : null;
+
+  // Anthropic: direkt mit speziellem Header (erlaubt CORS)
+  // Alle anderen: über Proxy wenn verfügbar, sonst direkt versuchen
+  let fetchUrl, fetchBody, fetchHeaders;
+
   if (anthropic) {
-    headers["x-api-key"] = cfg.key;
-    headers["anthropic-version"] = "2023-06-01";
-    headers["anthropic-dangerous-direct-browser-access"] = "true";
-  } else if (cfg.key) {
-    headers["Authorization"] = "Bearer " + cfg.key;
+    fetchUrl = cfg.endpoint;
+    fetchHeaders = {
+      "Content-Type": "application/json",
+      "x-api-key": cfg.key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    };
+    fetchBody = JSON.stringify({ model: cfg.model, max_tokens: maxTokens, system, messages });
+  } else if (proxyUrl) {
+    // Via Proxy: Browser → sync-server → LLM-Anbieter (kein CORS)
+    fetchUrl = proxyUrl;
+    fetchHeaders = { "Content-Type": "application/json" };
+    const llmBody = { model: cfg.model, max_tokens: maxTokens,
+      messages: [{ role: "system", content: system }].concat(messages) };
+    fetchBody = JSON.stringify({ endpoint: cfg.endpoint, key: cfg.key, body: llmBody });
+  } else {
+    // Direkt (für lokale Anbieter oder falls kein Proxy)
+    fetchUrl = cfg.endpoint;
+    fetchHeaders = { "Content-Type": "application/json" };
+    if (cfg.key) fetchHeaders["Authorization"] = "Bearer " + cfg.key;
+    fetchBody = JSON.stringify({ model: cfg.model, max_tokens: maxTokens,
+      messages: [{ role: "system", content: system }].concat(messages) });
   }
-  const body = anthropic
-    ? { model: cfg.model, max_tokens: maxTokens, system, messages }
-    : { model: cfg.model, max_tokens: maxTokens, messages: [{ role: "system", content: system }].concat(messages) };
+
+  const body = fetchBody; // alias für weiter unten
 
   let letzterFehler;
   for (let versuch = 0; versuch < 3; versuch++) {
@@ -379,10 +528,10 @@ async function ask(messages, system, maxTokens = 1200) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 90000);
     try {
-      const r = await fetch(cfg.endpoint, { method: "POST", headers, body: JSON.stringify(body), signal: ctrl.signal });
+      const r = await fetch(fetchUrl, { method: "POST", headers: fetchHeaders, body: fetchBody, signal: ctrl.signal });
       clearTimeout(timer);
       if (r.status === 401) throw new Error("STOP:Schluessel abgelehnt. Pruefe den API-Schluessel im Zahnrad.");
-      if (r.status === 402 || r.status === 403) throw new Error("STOP:Kein Guthaben oder kein Zugriff. Lade Guthaben auf console.anthropic.com/settings/billing.");
+      if (r.status === 402 || r.status === 403) throw new Error("STOP:Kein Guthaben oder kein Zugriff beim Anbieter. Guthaben aufladen oder Key prüfen.");
       if (r.status === 429) { letzterFehler = new Error("Zu viele Anfragen - kurz warten."); continue; }
       if (r.status >= 500) { letzterFehler = new Error("Modell-Server ueberlastet (" + r.status + ")."); continue; }
       if (!r.ok) {
@@ -3916,7 +4065,9 @@ function Missions({ agents, models, upd, droplet }) {
   const live = agents.find((x) => x.id === a.id) || a;
   // Eigenes Feld: "mission" am Agenten ist ein Beschreibungstext, kein Missions-Objekt.
   const roh = live.einsatz || (live.mission && typeof live.mission === "object" ? live.mission : null);
-  const m = roh && Array.isArray(roh.steps) ? roh : null;
+  const m = roh && Array.isArray(roh.steps)
+    ? { ...roh, steps: roh.steps, log: Array.isArray(roh.log) ? roh.log : [], ziel: typeof roh.ziel === "string" ? roh.ziel : (ziel || ""), status: roh.status || "wartet", modus: roh.modus || "sicher" }
+    : null;
 
   const save = (mm, note) => upd(live.id, { einsatz: mm }, note);
 
