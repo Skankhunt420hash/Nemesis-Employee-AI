@@ -15,7 +15,9 @@ nein() { echo -e "  ${R}PROBLEM${N} $*"; PROBLEME=$((PROBLEME+1)); }
 info() { echo -e "  ${Y}HINWEIS${N} $*"; }
 stufe(){ echo; echo -e "${B}$*${N}"; }
 PROBLEME=0
-TTY=/dev/tty; [ -r "$TTY" ] || TTY=/dev/null
+TTY=${NEMESIS_TTY:-/dev/tty}; [ -r "$TTY" ] || TTY=/dev/null
+
+main() {
 
 echo
 echo -e "${B}================ NEMESIS INSTALLER ================${N}"
@@ -25,30 +27,55 @@ stufe "1/7  Werkzeuge pruefen"
 command -v node >/dev/null 2>&1 || { nein "Node.js fehlt"; exit 1; }
 NV=$(node -p 'process.versions.node.split(".")[0]')
 [ "$NV" -ge 18 ] && ok "Node.js $NV" || { nein "Node.js $NV ist zu alt, brauche 18 oder neuer"; exit 1; }
-command -v pm2 >/dev/null 2>&1 && ok "pm2 vorhanden" || { nein "pm2 fehlt"; exit 1; }
 command -v curl >/dev/null 2>&1 || { nein "curl fehlt"; exit 1; }
 
 # ---------------------------------------------------------------------
 stufe "2/7  Deinen Server finden"
-INFO=$(pm2 jlist 2>/dev/null | node -e '
-let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{
-  try {
-    const l = JSON.parse(d.slice(d.indexOf("[")));
-    const p = l.find(x => /nemesis-sync/i.test((x.pm2_env||{}).pm_exec_path||"") || /nemesis-sync/i.test(x.name||""));
-    if (!p) return;
-    const e = p.pm2_env || {}, env = e.env || {};
-    console.log([p.name, e.pm_exec_path, env.PORT || e.PORT || "", env.ANTHROPIC_API_KEY || e.ANTHROPIC_API_KEY || "", env.DATA_DIR || e.DATA_DIR || ""].join("\t"));
-  } catch (err) {}
-});')
+MODUS=""; NAME=""; DATEI=""; PORT=""; ALTKEY=""; DATADIR=""; DIENSTUSER=""
 
-if [ -n "$INFO" ]; then
-  IFS=$'\t' read -r NAME DATEI PORT ALTKEY DATADIR <<< "$INFO"
-  ok "Laeuft unter pm2 als \"$NAME\""
-else
-  DATEI=$(find /root /home /opt /var/www /srv -maxdepth 5 -name 'nemesis-sync*' -not -path '*/node_modules/*' -not -name '*.backup*' -not -name '*.neu' 2>/dev/null | head -1)
-  NAME="nemesis-sync"; PORT=""; ALTKEY=""; DATADIR=""
-  [ -n "$DATEI" ] && info "Nicht in pm2 gefunden, aber Datei entdeckt" || { nein "Keine nemesis-sync Datei gefunden"; exit 1; }
+# a) systemd
+if command -v systemctl >/dev/null 2>&1; then
+  ALLE=$(systemctl list-units --type=service --all --no-legend 2>/dev/null | sed 's/^● *//' | awk '{print $1}')
+  for U in $(echo "$ALLE" | grep -i nemesis) $(echo "$ALLE" | grep -vi nemesis); do
+    EX=$(systemctl show "$U" -p ExecStart --value 2>/dev/null)
+    D=$(echo "$EX" | grep -o '/[^ ;]*nemesis-sync[^ ;]*\.js' | head -1)
+    if [ -n "$D" ]; then
+      MODUS="systemd"; NAME="$U"; DATEI="$D"
+      ENVS=$(systemctl show "$U" -p Environment --value 2>/dev/null)
+      PORT=$(echo "$ENVS" | tr ' ' '\n' | grep '^PORT=' | cut -d= -f2)
+      DATADIR=$(echo "$ENVS" | tr ' ' '\n' | grep '^DATA_DIR=' | cut -d= -f2)
+      ALTKEY=$(echo "$ENVS" | tr ' ' '\n' | grep '^ANTHROPIC_API_KEY=' | cut -d= -f2)
+      DIENSTUSER=$(systemctl show "$U" -p User --value 2>/dev/null)
+      break
+    fi
+  done
 fi
+
+# b) pm2
+if [ -z "$MODUS" ] && command -v pm2 >/dev/null 2>&1; then
+  INFO=$(pm2 jlist 2>/dev/null | node -e '
+  let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{
+    try {
+      const l = JSON.parse(d.slice(d.indexOf("[")));
+      const p = l.find(x => /nemesis-sync/i.test((x.pm2_env||{}).pm_exec_path||"") || /nemesis-sync/i.test(x.name||""));
+      if (!p) return;
+      const e = p.pm2_env || {}, env = e.env || {};
+      console.log([p.name, e.pm_exec_path, env.PORT || e.PORT || "", env.ANTHROPIC_API_KEY || e.ANTHROPIC_API_KEY || "", env.DATA_DIR || e.DATA_DIR || ""].join("\t"));
+    } catch (err) {}
+  });')
+  if [ -n "$INFO" ]; then
+    MODUS="pm2"
+    IFS=$'\t' read -r NAME DATEI PORT ALTKEY DATADIR <<< "$INFO"
+  fi
+fi
+
+if [ -z "$MODUS" ]; then
+  nein "Kein laufender nemesis-sync gefunden (weder systemd noch pm2)."
+  echo "          Schick mir die Ausgabe von: systemctl list-units --type=service | grep -i nemesis"
+  exit 1
+fi
+[ -f "$DATEI" ] || { nein "Datei $DATEI existiert nicht"; exit 1; }
+ok "Laeuft als $MODUS-Dienst \"$NAME\""
 PORT=${PORT:-3400}
 ORDNER=$(dirname "$DATEI")
 ok "Datei:  $DATEI"
@@ -72,12 +99,25 @@ cp "$DATEI" "$BK/" || { nein "Backup fehlgeschlagen"; exit 1; }
 [ -f "$ORDNER/nemesis-import.js" ] && cp "$ORDNER/nemesis-import.js" "$BK/"
 ok "Gesichert in $BK"
 
+neustart() {
+  if [ "$MODUS" = "systemd" ]; then
+    systemctl daemon-reload >/dev/null 2>&1
+    systemctl restart "$NAME" >/dev/null 2>&1
+  else
+    pm2 restart "$NAME" --update-env >/dev/null 2>&1; pm2 save >/dev/null 2>&1
+  fi
+}
+logs() {
+  if [ "$MODUS" = "systemd" ]; then journalctl -u "$NAME" -n 12 --no-pager 2>/dev/null
+  else pm2 logs "$NAME" --lines 12 --nostream 2>/dev/null; fi
+}
+
 zurueck() {
   echo; echo -e "${R}Rolle zurueck auf den alten Stand ...${N}"
   cp "$BK/$(basename "$DATEI")" "$DATEI"
   if [ -f "$BK/nemesis-serve.js" ];  then cp "$BK/nemesis-serve.js"  "$ORDNER/"; else rm -f "$ORDNER/nemesis-serve.js"; fi
   if [ -f "$BK/nemesis-import.js" ]; then cp "$BK/nemesis-import.js" "$ORDNER/"; else rm -f "$ORDNER/nemesis-import.js"; fi
-  pm2 restart "$NAME" --update-env >/dev/null 2>&1
+  neustart
   echo -e "${Y}Alter Stand ist wieder aktiv. Nichts kaputt.${N}"
 }
 
@@ -938,6 +978,7 @@ stufe "5/7  Anthropic-Schluessel"
 KEY="${ANTHROPIC_API_KEY:-}"
 [ -z "$KEY" ] && KEY="$ALTKEY"
 [ -z "$KEY" ] && KEY=$(grep -o "ANTHROPIC_API_KEY='[^']*'" ~/.bashrc 2>/dev/null | tail -1 | cut -d"'" -f2)
+[ -z "$KEY" ] && [ -f "$(dirname "$DATEI")/.env" ] && KEY=$(grep '^ANTHROPIC_API_KEY=' "$(dirname "$DATEI")/.env" | cut -d= -f2-)
 
 if [ -z "$KEY" ]; then
   echo "  Noch kein Schluessel hinterlegt."
@@ -951,35 +992,48 @@ case "$KEY" in
   *)        info "Schluessel sieht ungewoehnlich aus (beginnt nicht mit sk-ant-). Pruefe ihn." ;;
 esac
 
-if [ -n "$KEY" ]; then
-  sed -i "/ANTHROPIC_API_KEY=/d" ~/.bashrc 2>/dev/null
-  echo "export ANTHROPIC_API_KEY='$KEY'" >> ~/.bashrc
-  export ANTHROPIC_API_KEY="$KEY"
+if [ "$MODUS" = "systemd" ]; then
+  # systemd liest keine .bashrc. Deshalb: eigene .env-Datei + Drop-in.
+  ENVF="$ORDNER/.env"
+  touch "$ENVF"; chmod 600 "$ENVF"
+  [ -n "$DIENSTUSER" ] && [ "$DIENSTUSER" != "root" ] && chown "$DIENSTUSER" "$ENVF"
+  [ -z "$KEY" ] && KEY=$(grep '^ANTHROPIC_API_KEY=' "$ENVF" 2>/dev/null | cut -d= -f2-)
+  TOKEN=$(grep '^NEMESIS_ADMIN_TOKEN=' "$ENVF" 2>/dev/null | cut -d= -f2-)
+  [ -z "$TOKEN" ] && TOKEN=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 32)
+  {
+    [ -n "$KEY" ] && echo "ANTHROPIC_API_KEY=$KEY"
+    echo "NEMESIS_ADMIN_TOKEN=$TOKEN"
+    echo "NEMESIS_LOG_KOSTEN=1"
+  } > "$ENVF.neu"
+  grep -vE '^(ANTHROPIC_API_KEY|NEMESIS_ADMIN_TOKEN|NEMESIS_LOG_KOSTEN)=' "$ENVF" >> "$ENVF.neu" 2>/dev/null
+  mv "$ENVF.neu" "$ENVF"; chmod 600 "$ENVF"
+  DROP="/etc/systemd/system/$NAME.d"
+  mkdir -p "$DROP"
+  printf '[Service]\nEnvironmentFile=%s\n' "$ENVF" > "$DROP/nemesis-schluessel.conf"
+  ok "Schluessel sicher in $ENVF (nur fuer root lesbar)"
+else
+  if [ -n "$KEY" ]; then
+    sed -i "/ANTHROPIC_API_KEY=/d" ~/.bashrc 2>/dev/null
+    echo "export ANTHROPIC_API_KEY='$KEY'" >> ~/.bashrc
+  fi
+  TOKEN=$(grep -o "NEMESIS_ADMIN_TOKEN='[^']*'" ~/.bashrc 2>/dev/null | tail -1 | cut -d"'" -f2)
+  if [ -z "$TOKEN" ]; then
+    TOKEN=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 32)
+    echo "export NEMESIS_ADMIN_TOKEN='$TOKEN'" >> ~/.bashrc
+  fi
+  grep -q "NEMESIS_LOG_KOSTEN" ~/.bashrc 2>/dev/null || echo "export NEMESIS_LOG_KOSTEN=1" >> ~/.bashrc
 fi
-
-TOKEN=$(grep -o "NEMESIS_ADMIN_TOKEN='[^']*'" ~/.bashrc 2>/dev/null | tail -1 | cut -d"'" -f2)
-if [ -z "$TOKEN" ]; then
-  TOKEN=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 32)
-  echo "export NEMESIS_ADMIN_TOKEN='$TOKEN'" >> ~/.bashrc
-fi
-export NEMESIS_ADMIN_TOKEN="$TOKEN"
-grep -q "NEMESIS_LOG_KOSTEN" ~/.bashrc 2>/dev/null || echo "export NEMESIS_LOG_KOSTEN=1" >> ~/.bashrc
-export NEMESIS_LOG_KOSTEN=1
-export PORT="$PORT"
+[ -n "$KEY" ] && export ANTHROPIC_API_KEY="$KEY"
+export NEMESIS_ADMIN_TOKEN="$TOKEN" NEMESIS_LOG_KOSTEN=1 PORT="$PORT"
 [ -n "$DATADIR" ] && export DATA_DIR="$DATADIR"
 
 # ---------------------------------------------------------------------
 stufe "6/7  Neustart"
 cd "$ORDNER"
-if pm2 describe "$NAME" >/dev/null 2>&1; then
-  pm2 restart "$NAME" --update-env >/dev/null 2>&1
-else
-  pm2 start "$DATEI" --name "$NAME" >/dev/null 2>&1
-fi
-pm2 save >/dev/null 2>&1
+neustart
 
 LEBT=""
-for i in 1 2 3 4 5 6 7 8 9 10; do
+for i in $(seq 1 15); do
   sleep 1
   # Prueft den NEUEN Code, nicht nur irgendeinen Prozess auf dem Port
   curl -s "localhost:$PORT/health" 2>/dev/null | grep -q '"ok":true' && \
@@ -989,7 +1043,7 @@ if [ -n "$LEBT" ]; then
   ok "Server laeuft mit der neuen Version"
 else
   nein "Server startet nicht. Letzte Log-Zeilen:"
-  pm2 logs "$NAME" --lines 12 --nostream 2>/dev/null | tail -12 | sed 's/^/          /'
+  logs | tail -12 | sed 's/^/          /'
   zurueck; exit 1
 fi
 
@@ -1048,3 +1102,6 @@ echo "  Backup liegt in: $BK"
 echo "  Noch von Hand:   Ausgabenlimit 50 USD in console.anthropic.com -> Settings -> Limits"
 echo
 rm -rf "$TMP"
+}
+
+main "$@"
