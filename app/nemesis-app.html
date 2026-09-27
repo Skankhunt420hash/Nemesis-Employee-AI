@@ -97,6 +97,29 @@
 </div></div>
 
 <script>
+/* ---------- Nie wieder leerer Bildschirm: Startfehler sichtbar machen ---------- */
+(function(){
+  function zeige(msg){
+    setTimeout(function(){
+      var r = document.getElementById("root");
+      if (!r || r.innerText.trim() && !/startet/.test(r.innerText)) return;
+      var t = String(msg || "Unbekannter Fehler").replace(/[<>&]/g, function(c){ return {"<":"&lt;",">":"&gt;","&":"&amp;"}[c]; });
+      r.innerHTML = '<div id="boot"><b style="color:#FF2D78">Nemesis Lab konnte nicht starten</b><br><br>'
+        + '<code style="font-size:13px;color:#EDEDF5">' + t.slice(0, 400) + '</code><br><br>'
+        + 'Deine Agenten sind sicher gespeichert.<br><br>'
+        + '<button onclick="location.reload()" style="padding:14px 22px;background:#22E0FF;border:0;border-radius:3px;font-weight:700">Neu laden</button> '
+        + '<button onclick="NX.exportAll()" style="padding:14px 22px;background:transparent;color:#EDEDF5;border:1px solid #35355a;border-radius:3px">Sicherung laden</button></div>';
+    }, 50);
+  }
+  window.addEventListener("error", function(e){
+    if (e && e.target && e.target !== window) { if (e.target.tagName === "SCRIPT") zeige("Datei nicht ladbar: " + e.target.src); return; }
+    zeige(e && e.message);
+  }, true);
+  window.addEventListener("unhandledrejection", function(e){ zeige(e && e.reason && (e.reason.message || e.reason)); });
+  window.addEventListener("load", function(){ setTimeout(function(){ if (!window.React || !window.Babel) zeige("React/Compiler nicht geladen (Internet oder Werbeblocker?)"); }, 8000); });
+})();
+</script>
+<script>
 /* ---------- NEMESIS: Server-Erkennung + Netz-Diagnose ---------- */
 (function(){
   try {
@@ -5120,7 +5143,7 @@ function Backup({ agents, activity, models, commit, back }) {
 }
 
 
-ReactDOM.createRoot(document.getElementById("root")).render(<NemesisLab />);
+ReactDOM.createRoot(document.getElementById("root")).render(<Schutz><NemesisLab /></Schutz>);
 </script>
 </body>
 </html>
