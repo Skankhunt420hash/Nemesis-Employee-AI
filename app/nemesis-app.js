@@ -38,10 +38,15 @@ function dotenv() {
   for (const k of Object.keys(d)) if (process.env[k] === undefined && d[k] !== "") process.env[k] = d[k];
 })();
 
+// Unsichtbares vom Einfuegen entfernen: Leerzeichen, \r, Anfuehrungszeichen, "Bearer "
+function sauber(v) {
+  return String(v || "").replace(/[\r\n\t]/g, "").trim().replace(/^['"]+|['"]+$/g, "").replace(/^Bearer\s+/i, "").trim();
+}
+
 function schluessel(namen) {
   const d = dotenv();
   for (const n of namen) {
-    const v = process.env[n] || d[n];
+    const v = sauber(process.env[n]) || sauber(d[n]);
     if (v && v.length > 8) return v;
   }
   // Andere Schreibweisen, z.B. GROQ_KEY_1, NEMESIS_GEMINI_KEY
@@ -49,7 +54,7 @@ function schluessel(namen) {
   const re = new RegExp("(^|_)" + stamm + "(_|$).*(KEY|TOKEN)", "i");
   for (const quelle of [process.env, d]) {
     for (const k of Object.keys(quelle)) {
-      if (re.test(k) && !/ADMIN|ZUGANG/.test(k) && String(quelle[k]).length > 8) return String(quelle[k]);
+      if (re.test(k) && !/ADMIN|ZUGANG/.test(k) && sauber(quelle[k]).length > 8) return sauber(quelle[k]);
     }
   }
   return "";
