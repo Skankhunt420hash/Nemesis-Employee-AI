@@ -5061,21 +5061,33 @@ function ExportPanel({ agent, agents, models, setActive, upd }) {
     try {
       const c = toJSON(await ask(
         [{ role: "user", content: `Agent: ${agent.name}\nBranche: ${agent.branche}\nFunktion: ${agent.funktion}\nAufgabe: ${agent.mission}\nSkills: ${agent.skills.join(", ")}` }],
-        `Verkaufstexte für eine Landing Page, die diesen KI-Agenten an einen Schweizer KMU-Betrieb verkauft. Antworte NUR mit JSON.
+        `Verkaufstexte für eine Landing Page, die diesen KI-Agenten an einen Schweizer KMU-Betrieb verkauft. Schweizer Schreibweise (ss statt ß).
+WICHTIG, was der Agent WIRKLICH ist: ein Text-Chat-Assistent. Er läuft als Chatfenster auf der Website des Betriebs und über einen Link/QR-Code (Tischkarte, Instagram, Google-Profil). Er beantwortet Fragen von Gästen/Kunden rund um die Uhr, auf Basis des hinterlegten Wissens (Angebot, Zeiten, Preise, Kontakt) und kann Anfragen (z.B. Reservationswünsche) aufnehmen.
+Verspreche NICHTS darüber hinaus: keine Telefonanrufe, keine Sprach-/Telefonfunktion, keine direkte Anbindung an Kassen-, Reservations- oder Buchungssysteme, keine Zahlungen.
+Antworte NUR mit JSON.
 {"headline": string (max 8 Wörter), "sub": string, "bullets": [3 Nutzenversprechen], "cta": string (max 4 Wörter)}`, 900));
+      const e = (t) => String(t == null ? "" : t).replace(/[<>&"]/g, (x) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[x]));
+      const srv = window.nxServer(); let basis = ""; try { basis = srv ? new URL(srv).origin : ""; } catch (x) {}
+      const demo = agent.publish && agent.publish.id && agent.publish.active !== false && basis ? basis + "/a/" + agent.publish.id : "";
       setLanding('<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' +
-        agent.name + '</title><style>*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:#0b0b12;color:#f0f0f5;line-height:1.6}' +
+        e(agent.name) + '</title><style>*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:#0b0b12;color:#f0f0f5;line-height:1.6}' +
         '.w{max-width:760px;margin:0 auto;padding:60px 22px}h1{font-size:40px;line-height:1.1;margin:0 0 14px}' +
         'p.s{font-size:19px;color:#a0a0bb;margin:0 0 34px}ul{list-style:none;padding:0;margin:0 0 34px}li{padding:14px 0;border-top:1px solid #26263f}' +
-        'a.c{display:inline-block;background:#FF2D78;color:#0b0b12;padding:15px 30px;border-radius:4px;text-decoration:none;font-weight:700}' +
+        'a.c{display:inline-block;background:#FF2D78;color:#0b0b12;padding:15px 30px;border-radius:4px;text-decoration:none;font-weight:700;margin:0 10px 10px 0}' +
+        'a.c.g{background:transparent;color:#f0f0f5;border:1px solid #35355a}' +
         '.tag{font-size:12px;letter-spacing:2px;text-transform:uppercase;color:#22E0FF;margin-bottom:14px}' +
         'footer{border-top:1px solid #26263f;margin-top:50px;padding-top:20px;font-size:13px;color:#6c6c88}</style></head><body><div class="w">' +
-        '<div class="tag">' + agent.branche + ' · ' + agent.funktion + '</div><h1>' + c.headline + '</h1><p class="s">' + c.sub + '</p><ul>' +
-        c.bullets.map((b) => '<li>' + b + '</li>').join("") + '</ul><a class="c" href="mailto:hallo@nemesisstudios.ch?subject=' + encodeURIComponent(agent.name) + '">' + c.cta + '</a>' +
-        '<footer>' + agent.name + ' · Stufe ' + l + ' · ' + tierOf(l) + (agent.qa ? ' · Abnahme ' + agent.qa.score + '/100' : '') + ' · Nemesis Studios</footer></div></body></html>');
+        '<div class="tag">' + e(agent.branche) + ' · ' + e(agent.funktion) + '</div><h1>' + e(c.headline) + '</h1><p class="s">' + e(c.sub) + '</p><ul>' +
+        (c.bullets || []).map((b) => '<li>' + e(b) + '</li>').join("") + '</ul>' +
+        (demo ? '<a class="c" href="' + e(demo) + '" target="_blank" rel="noopener">Jetzt live testen</a>' : '') +
+        '<a class="c' + (demo ? ' g' : '') + '" href="mailto:hallo@nemesisstudios.ch?subject=' + encodeURIComponent(agent.name) + '">' + e(c.cta) + '</a>' +
+        '<footer>' + e(agent.name) + (agent.qa ? ' · geprüft ' + agent.qa.score + '/100' : '') + ' · Nemesis Studios</footer></div></body></html>');
       setKind("landing");
-    } catch (e) { setLanding("Fehler: " + e.message); }
+    } catch (e) { alert("Landing Page ging nicht: " + e.message); }
     setBusy(false);
+  };
+  const oeffneLanding = () => {
+    try { const u = URL.createObjectURL(new Blob([landing], { type: "text/html" })); window.open(u, "_blank"); setTimeout(() => URL.revokeObjectURL(u), 60000); } catch (e) {}
   };
 
   const payload = kind === "kunde" ? "" : kind === "json" ? json : kind === "html" ? buildAgentHTML(agent, model) : kind === "report" ? buildReport(agent) : landing;
@@ -5109,8 +5121,22 @@ function ExportPanel({ agent, agents, models, setActive, upd }) {
           <button className="btn am" onClick={makeLanding} disabled={busy}>{busy ? "wird getextet…" : "Landing Page erzeugen"}</button>
         </>
       )}
+      {kind === "landing" && landing && (
+        <>
+          <div className="log done">Deine Verkaufsseite. So sieht sie der Kunde:{!(agent.publish && agent.publish.id) && " (Tipp: erst unter «Kunde ⭐» online stellen, dann bekommt die Seite einen «Jetzt live testen»-Knopf.)"}</div>
+          <iframe title="Vorschau" srcDoc={landing} sandbox="allow-popups allow-popups-to-escape-sandbox"
+            style={{ width: "100%", height: 460, border: "1px solid #26263f", borderRadius: 6, background: "#0b0b12", margin: "8px 0 12px" }} />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+            <button className="btn am" onClick={oeffneLanding}>Gross öffnen</button>
+            <button className="btn ghost" onClick={makeLanding} disabled={busy}>{busy ? "…" : "Neu texten"}</button>
+          </div>
+          <details><summary style={{ cursor: "pointer", color: "#9494b0", fontSize: 13, margin: "4px 0 10px" }}>Code (zum Hochladen auf eine Website)</summary>
+            <Deliverable text={landing} filename={fname} />
+          </details>
+        </>
+      )}
 
-      {payload && <Deliverable text={payload} filename={fname} />}
+      {payload && kind !== "landing" && <Deliverable text={payload} filename={fname} />}
     </>
   );
 }
