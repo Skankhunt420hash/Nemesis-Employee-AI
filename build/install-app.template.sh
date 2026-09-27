@@ -66,7 +66,7 @@ FREI=$(df -Pm "$ORDNER" | awk 'NR==2{print $4}')
 stufe "3/7  Backup"
 BK="$ORDNER/backup-app-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BK" && cp "$DATEI" "$BK/" || { nein "Backup fehlgeschlagen"; exit 1; }
-for f in nemesis-app.js nemesis-app.html; do [ -f "$ORDNER/$f" ] && cp "$ORDNER/$f" "$BK/"; done
+for f in nemesis-app.js nemesis-app.html nemesis-serve.js; do [ -f "$ORDNER/$f" ] && cp "$ORDNER/$f" "$BK/"; done
 ok "Gesichert in $BK"
 
 neustart() {
@@ -83,6 +83,7 @@ zurueck() {
   for f in nemesis-app.js nemesis-app.html; do
     if [ -f "$BK/$f" ]; then cp "$BK/$f" "$ORDNER/$f"; else rm -f "$ORDNER/$f"; fi
   done
+  [ -f "$BK/nemesis-serve.js" ] && cp "$BK/nemesis-serve.js" "$ORDNER/nemesis-serve.js"
   neustart; sleep 2
   curl -s "localhost:$PORT/health" | grep -q '"ok":true' && echo -e "  ${G}Alter Stand laeuft wieder.${N}" || echo -e "  ${R}Auch alter Stand startet nicht. Logs schicken.${N}"
 }
@@ -99,6 +100,9 @@ __APPHTML__
 base64 -d > "$TMP/patch-app.js" <<'__PATCH__'
 @@PATCH@@
 __PATCH__
+base64 -d > "$TMP/patch-serve.js" <<'__PATCHSERVE__'
+@@PATCHSERVE@@
+__PATCHSERVE__
 node --check "$TMP/nemesis-app.js" 2>/dev/null || { nein "Installer beschaedigt. Nochmal herunterladen."; exit 1; }
 grep -q "Nemesis Lab" "$TMP/nemesis-app.html" || { nein "App-Datei beschaedigt. Nochmal herunterladen."; exit 1; }
 [ -f "$ORDNER/nemesis-serve.js" ] || { nein "nemesis-serve.js fehlt. Erst den Haupt-Installer (install.sh) laufen lassen."; exit 1; }
@@ -113,6 +117,13 @@ case "$ERG" in
          echo "          Schick mir: grep -n 'SERVE' $DATEI"; zurueck; exit 1 ;;
 esac
 node --check "$DATEI" 2>/dev/null || { nein "Syntaxfehler nach Einbau"; zurueck; exit 1; }
+ERG2=$(node "$TMP/patch-serve.js" "$ORDNER/nemesis-serve.js" 2>/dev/null)
+case "$ERG2" in
+  SCHON) ok "Kunden-Chat hat schon ein Ausweichmodell" ;;
+  OK)    if node --check "$ORDNER/nemesis-serve.js.neu" 2>/dev/null; then mv "$ORDNER/nemesis-serve.js.neu" "$ORDNER/nemesis-serve.js"; ok "Kunden-Chat: faellt Claude aus, antwortet automatisch das Ausweichmodell"
+         else rm -f "$ORDNER/nemesis-serve.js.neu"; info "Ausweichmodell nicht eingebaut (Syntax), Kunden-Chat bleibt wie er war"; fi ;;
+  *)     info "Kunden-Datei sieht anders aus, Ausweichmodell nicht eingebaut (Kunden-Chat bleibt wie er war)" ;;
+esac
 ok "Syntax sauber"
 
 # Zugang (Schloss) holen oder anlegen
@@ -209,6 +220,32 @@ if [ -n "$HAT" ]; then
         -d "{\"modell\":\"$( [ $P = groq ] && echo llama || { [ $P = together ] && echo auto || echo $P; } )\",\"messages\":[{\"role\":\"user\",\"content\":\"Sag OK\"}],\"max_tokens\":20}")
     echo "$TP" | P=$P node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d),p=process.env.P;const f=(j.versuche||[]).find(v=>v.anbieter===p);if(j.ok&&j.anbieter===p)console.log("  \x1b[1;32mOK\x1b[0m      "+p+": "+j.modell);else console.log("  \x1b[1;33mHINWEIS\x1b[0m "+p+": "+(f?(f.status||"netz")+" "+String(f.fehler).slice(0,120):"kein passendes Gratis-Modell"))}catch(e){}})'
   done
+fi
+
+# Echter Kunden-Test: Test-Agent anlegen, wie ein Shop chatten, wieder loeschen
+SD=$(systemctl show "$NAME" -p Environment --value 2>/dev/null | tr ' ' '\n' | grep '^DATA_DIR=' | cut -d= -f2)
+[ -z "$SD" ] && SD=$(grep '^DATA_DIR=' "$ORDNER/.env" 2>/dev/null | cut -d= -f2-)
+SD=${SD:-$ORDNER/sync-data}
+if [ -d "$SD" ]; then
+  TF="$SD/zz-nemesis-selbsttest.json"
+  printf '{"agents":[{"id":"t","name":"Selbsttest","publish":{"id":"nemesis-selbsttest","active":true,"name":"Selbsttest","greeting":"Hallo","systemPrompt":"Du bist ein Testassistent. Antworte nur mit: Alles bereit.","maxTokens":40}}]}' > "$TF"
+  echo "  ...    Teste Kunden-Weg (Widget, Seite, Chat) bis 60 s"
+  sleep 21   # Server liest Agenten alle 20 s neu
+  W=$(curl -s --max-time 8 "https://$DOMAIN/embed.js" | grep -c attachShadow)
+  [ "$W" -gt 0 ] && ok "Chat-Knopf-Code (embed.js) oeffentlich erreichbar" || nein "embed.js ueber https nicht erreichbar"
+  L=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://$DOMAIN/a/nemesis-selbsttest")
+  [ "$L" = "200" ] && ok "Kunden-Seite /a/<name> (Link + QR) funktioniert" || nein "Kunden-Seite antwortet $L"
+  CH=$(curl -s --max-time 60 "https://$DOMAIN/api/chat" -H 'Content-Type: application/json' -H "Origin: https://beispiel-shop.ch" \
+       -d '{"agentId":"nemesis-selbsttest","sessionId":"selbsttest","messages":[{"role":"user","content":"Test"}]}')
+  if echo "$CH" | grep -q '"reply"' && ! echo "$CH" | grep -q '"failed":true'; then
+    ok "Kunden-Chat von fremder Website antwortet: $(echo "$CH" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).reply.slice(0,60))}catch(e){}})')"
+  else
+    nein "Kunden-Chat antwortet nicht richtig: $(echo "$CH" | head -c 160)"
+    logs | grep -i "serve\|claude\|llm" | tail -4 | sed 's/^/          /'
+  fi
+  rm -f "$TF"
+else
+  info "Agenten-Ordner nicht gefunden, Kunden-Test uebersprungen"
 fi
 
 # ---------------------------------------------------------------------

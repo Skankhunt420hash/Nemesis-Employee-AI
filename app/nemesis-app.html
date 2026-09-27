@@ -4880,8 +4880,145 @@ function Sales(ctx) {
   );
 }
 
-function ExportPanel({ agent, models, setActive }) {
-  const [kind, setKind] = useState("html");
+/* ---------- Kunde: online stellen, Link, Code, Nachricht ---------- */
+function nxSlug(t) {
+  let x = String(t || "agent").toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  if (x.length < 2) x = (x || "a") + "-agent";
+  return x;
+}
+function nxHell(hex) {
+  const h = String(hex || "").replace("#", "");
+  if (h.length !== 6) return false;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  return (r * 299 + g * 587 + b * 114) / 1000 > 150;
+}
+
+function KundePanel({ agent, agents, upd }) {
+  const srv = window.nxServer();
+  let basis = ""; try { basis = srv ? new URL(srv).origin : ""; } catch (e) {}
+  const pub = agent.publish && agent.publish.id ? agent.publish : null;
+  const firma = (String((agent.knowledge && agent.knowledge.betrieb) || "").split(/[,\n]/)[0] || "").trim() || agent.name;
+  const [farbe, setFarbe] = useState((pub && pub.brand && pub.brand.color) || "#1f2937");
+  const [gruss, setGruss] = useState((pub && pub.greeting) || agent.greeting || ("Grüezi! Ich bin der digitale Assistent von " + firma + ". Wie kann ich helfen?"));
+  const [check, setCheck] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const pruefe = async (id) => {
+    setCheck("prueft");
+    for (let i = 0; i < 9; i++) {
+      try { const r = await fetch(basis + "/api/agent/" + encodeURIComponent(id), { cache: "no-store" }); if (r.ok) { setCheck("ok"); return; } } catch (e) {}
+      await new Promise((r) => setTimeout(r, 4000));
+    }
+    setCheck("fehlt");
+  };
+  useEffect(() => { if (pub && basis && pub.active !== false) pruefe(pub.id); }, []);
+
+  const online = async (aktiv) => {
+    setBusy(true); setMsg("");
+    try {
+      let id = pub ? pub.id : nxSlug(agent.name);
+      if (!pub) {
+        const vergeben = new Set((agents || []).filter((x) => x.id !== agent.id && x.publish && x.publish.id).map((x) => x.publish.id));
+        const stamm = id; let n = 2;
+        while (vergeben.has(id)) id = stamm + "-" + n++;
+      }
+      const p = {
+        id, active: aktiv, name: agent.name, greeting: gruss.trim() || "Grüezi! Wie kann ich helfen?",
+        placeholder: "Ihre Frage…",
+        suggestions: (pub && pub.suggestions) || ["Öffnungszeiten?", "Wie erreiche ich Sie?", "Was bieten Sie an?"],
+        systemPrompt: compilePrompt(agent), model: "claude-haiku-4-5", maxTokens: 600,
+        brand: { color: farbe, textOnColor: nxHell(farbe) ? "#111111" : "#ffffff", position: "right" },
+        quota: (pub && pub.quota) || { messagesPerMonth: 1500 },
+        allowedOrigins: (pub && pub.allowedOrigins) || [],
+        errorMessage: "Da ist etwas schiefgelaufen. Bitte versuchen Sie es gleich nochmal oder melden Sie sich direkt bei uns.",
+        publishedAt: new Date().toISOString(),
+      };
+      await upd(agent.id, { publish: p }, agent.name + (aktiv ? ": online gestellt" : ": pausiert"));
+      if (aktiv) pruefe(id); else setCheck("");
+    } catch (e) { setMsg("Fehler: " + e.message); }
+    setBusy(false);
+  };
+
+  if (!basis) return <div className="log err">Online stellen geht nur, wenn die App über deinen Server-Link läuft (…/k/&lt;Zugang&gt;/app).</div>;
+
+  const einstellungen = (
+    <>
+      <span className="lbl">Begrüssung im Chat</span>
+      <input value={gruss} onChange={(e) => setGruss(e.target.value)} />
+      <span className="lbl" style={{ marginTop: 14 }}>Firmenfarbe des Kunden</span>
+      <input type="color" value={farbe} onChange={(e) => setFarbe(e.target.value)} style={{ height: 44, padding: 4 }} />
+      <div style={{ height: 14 }} />
+    </>
+  );
+
+  if (!pub || pub.active === false) {
+    return (
+      <>
+        <div className="log">Stellt den Agenten auf deinen Server. Der Kunde bekommt einen Link (mit QR-Code) und eine einzige Zeile Code für seine Website. Kein Schlüssel, kein Abo, nichts zu installieren.</div>
+        {einstellungen}
+        <button className="btn am" onClick={() => online(true)} disabled={busy}>{busy ? "stellt online…" : (pub ? "Wieder online stellen" : "Online stellen")}</button>
+        {msg && <div className="log err">{msg}</div>}
+      </>
+    );
+  }
+
+  const id = pub.id;
+  const link = basis + "/a/" + id;
+  const code = '<script src="' + basis + '/embed.js" data-agent="' + id + '" async><' + '/script>';
+  const qr = "https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=12&data=" + encodeURIComponent(link);
+  const nachricht = "Grüezi\n\nIhr digitaler Assistent «" + agent.name + "» ist startklar. Er beantwortet Fragen Ihrer Kundschaft rund um die Uhr.\n\n" +
+    "1) OHNE WEBSITE – für Flyer, Tischkarten, Schaufenster, Instagram-Bio und Google-Profil:\n" + link + "\n(QR-Code: " + qr + ")\n\n" +
+    "2) AUF IHRER WEBSITE – diese eine Zeile einfügen:\n" + code + "\n\n" +
+    "Wo einfügen:\n" +
+    "• WordPress: Plugin «WPCode» installieren → Code Snippets → Header & Footer → Feld «Footer» → Speichern\n" +
+    "• Wix: Einstellungen → Benutzerdefinierter Code → + Code hinzufügen → «Body – Ende», alle Seiten (braucht ein Premium-Paket)\n" +
+    "• Shopify: Onlineshop → Themes → … → Code bearbeiten → theme.liquid → direkt vor </body> einfügen → Speichern\n" +
+    "• Squarespace: Einstellungen → Erweitert → Code-Injektion → Fusszeile (ab Business-Paket)\n" +
+    "• Webflow: Site Settings → Custom Code → Footer Code → Publish\n" +
+    "• Jimdo: Einstellungen → Eigener Code bzw. «Header bearbeiten»\n\n" +
+    "Danach erscheint unten rechts der Chat-Knopf. Keine Anmeldung, kein Schlüssel, keine Wartung für Sie.\n\n" +
+    "Lieber gar nichts selber machen? Schicken Sie mir einen Zugang zu Ihrer Website, dann baue ich es in 5 Minuten ein.\n\n" +
+    "Freundliche Grüsse\nNemesis Studios";
+
+  return (
+    <>
+      <div className={"log " + (check === "ok" ? "done" : check === "fehlt" ? "err" : "")}>
+        {check === "ok" ? "✅ LIVE — auf dem Server geprüft. Kunden können ihn jetzt nutzen."
+          : check === "prueft" ? "Prüfe, ob der Server den Agenten hat … (bis 30 Sekunden)"
+          : check === "fehlt" ? "Server hat den Agenten noch nicht. Zahnrad → «Verbindung testen»: Agenten-Speicher muss OK sein. Dann hier «Aktualisieren»."
+          : "Online."}
+      </div>
+
+      <span className="lbl">1 · Link — für Kunden ohne Website (QR, Instagram, Google)</span>
+      <Deliverable text={link} filename={id + "-link.txt"} />
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "10px 0 6px" }}>
+        <a className="btn ghost sm" href={link} target="_blank" rel="noopener">Testen</a>
+        <a className="btn ghost sm" href={qr} target="_blank" rel="noopener">QR-Code gross</a>
+      </div>
+      <img src={qr} alt="QR-Code" style={{ width: 150, height: 150, background: "#fff", padding: 6, borderRadius: 6, margin: "6px 0 14px" }} />
+
+      <span className="lbl">2 · Eine Zeile für die Website</span>
+      <Deliverable text={code} filename={id + "-code.txt"} />
+
+      <span className="lbl" style={{ marginTop: 14 }}>3 · Fertige Nachricht an den Kunden (alles drin)</span>
+      <Deliverable text={nachricht} filename={id + "-an-kunde.txt"} />
+
+      <span className="lbl" style={{ marginTop: 18 }}>Anpassen</span>
+      {einstellungen}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button className="btn ghost" onClick={() => online(true)} disabled={busy}>{busy ? "…" : "Aktualisieren"}</button>
+        <button className="btn ghost" onClick={() => online(false)} disabled={busy}>Pausieren</button>
+      </div>
+      <div className="log" style={{ marginTop: 12 }}>Nach Änderungen am Agenten (Wissen, Prompt, Training) einmal «Aktualisieren» drücken. Link und Code bleiben gleich — beim Kunden ändert sich nichts.</div>
+      {msg && <div className="log err">{msg}</div>}
+    </>
+  );
+}
+
+function ExportPanel({ agent, agents, models, setActive, upd }) {
+  const [kind, setKind] = useState("kunde");
   const [landing, setLanding] = useState("");
   const [busy, setBusy] = useState(false);
   const model = models.find((m) => m.id === agent.model);
@@ -4918,7 +5055,7 @@ function ExportPanel({ agent, models, setActive }) {
     setBusy(false);
   };
 
-  const payload = kind === "json" ? json : kind === "html" ? buildAgentHTML(agent, model) : kind === "report" ? buildReport(agent) : landing;
+  const payload = kind === "kunde" ? "" : kind === "json" ? json : kind === "html" ? buildAgentHTML(agent, model) : kind === "report" ? buildReport(agent) : landing;
   const fname = kind === "json" ? agent.name + ".json" : kind === "html" ? agent.name + ".html" : kind === "report" ? agent.name + "-Pruefbericht.txt" : agent.name + "-landing.html";
 
   return (
@@ -4934,12 +5071,13 @@ function ExportPanel({ agent, models, setActive }) {
       {r < 70 && <div className="log err">Verkaufsreife {r} %. Vor der Übergabe: Wissensbasis füllen und Abnahme bestehen. Ein Agent, der Preise erfindet, kostet dich den Kunden.</div>}
 
       <div className="seg">
-        {[["html", "App"], ["json", "Konfig"], ["report", "Bericht"], ["landing", "Landing"]].map(([k, lb]) => (
+        {[["kunde", "Kunde ⭐"], ["landing", "Landing"], ["report", "Bericht"], ["json", "Konfig"], ["html", "Datei"]].map(([k, lb]) => (
           <button key={k} className={kind === k ? "on" : ""} onClick={() => setKind(k)}>{lb}</button>
         ))}
       </div>
 
-      {kind === "html" && <div className="log">Eine einzige HTML-Datei mit dem vollständigen Produktions-Prompt. Kunde öffnet sie, trägt seinen Schlüssel ein, fertig.</div>}
+      {kind === "kunde" && <KundePanel agent={agent} agents={agents} upd={upd} />}
+      {kind === "html" && <div className="log warn">Alte Variante: Datei, in die der Kunde einen eigenen API-Schlüssel eintragen muss. Für Kunden lieber «Kunde» benutzen.</div>}
       {kind === "json" && <div className="log">Konfiguration für deinen Droplet-Server oder OpenClaw. Enthält Wissensbasis, Prompt, Modell, Abnahmestand.</div>}
       {kind === "report" && <div className="log">Der Prüfbericht ist das Dokument, das den Preis rechtfertigt. Leg ihn der Offerte bei.</div>}
       {kind === "landing" && !landing && (
