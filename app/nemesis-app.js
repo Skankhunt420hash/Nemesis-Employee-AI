@@ -32,6 +32,12 @@ function dotenv() {
   envCache = e; envZeit = Date.now();
   return e;
 }
+// Beim Start: .env in die Umgebung holen, falls der Dienst sie nicht selbst laedt.
+(function () {
+  const d = dotenv();
+  for (const k of Object.keys(d)) if (process.env[k] === undefined && d[k] !== "") process.env[k] = d[k];
+})();
+
 function schluessel(namen) {
   const d = dotenv();
   for (const n of namen) {
@@ -130,6 +136,7 @@ const listen = {};            // anbieter -> { ids, zeit }
 const pause = {};             // anbieter -> bis wann gesperrt (ms)
 const zaehler = { anfragen: 0, frei: 0, bezahlt: 0, fehler: 0, proAnbieter: {}, seit: new Date().toISOString() };
 let letzterFehler = null;
+const fehlerJe = {};
 
 async function holeJSON(url, key, ms) {
   const ctrl = new AbortController();
@@ -288,6 +295,7 @@ async function rotiere(einsatz) {
         choices: [{ message: { role: "assistant", content: r.text } }] } };
     }
     versuche.push({ anbieter: k.name, modell: k.id, status: r.status, fehler: r.msg });
+    fehlerJe[k.name] = { zeit: new Date().toISOString(), modell: k.id, status: r.status, fehler: r.msg };
     if (r.status === 429) pause[k.name] = Date.now() + Math.min(Math.max(r.warte, 30), 300) * 1000;
     else if (r.status === 401 || r.status === 403) pause[k.name] = Date.now() + 10 * 60 * 1000;
     else if (r.status === 404) { if (listen[k.name]) listen[k.name].zeit = 0; }
@@ -323,11 +331,29 @@ const MANIFEST = JSON.stringify({
 });
 const ICON = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' fill='#06060B'/><path d='M32 10 L54 32 L32 54 L10 32 Z' fill='none' stroke='#FF2D78' stroke-width='5'/></svg>";
 
+/* ---------- Zweites Schloss ---------- */
+const OEFFENTLICH = [/^\/$/, /^\/health$/, /^\/embed\.js$/, /^\/api\/chat$/, /^\/api\/agent\/[^/]+$/,
+                     /^\/a\/[^/]+\/?$/, /^\/favicon\.ico$/, /^\/robots\.txt$/];
+function vonAussen(req) {
+  const h = req.headers || {};
+  if (h["x-forwarded-for"] || h["x-real-ip"] || h["x-forwarded-proto"] || h["forwarded"]) return true;
+  const ra = String((req.socket && req.socket.remoteAddress) || "");
+  if (!(ra === "127.0.0.1" || ra === "::1" || ra === "::ffff:127.0.0.1")) return true;
+  return !/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(String(h.host || ""));
+}
+
 /* ---------- Router ---------- */
 async function behandle(req, res, url, CORS) {
   let p = url.pathname;
   const z = process.env.NEMESIS_ZUGANG || dotenv().NEMESIS_ZUGANG || "";
   if (z.length >= 16 && (p === "/k/" + z || p.startsWith("/k/" + z + "/"))) p = p.slice(z.length + 3) || "/";
+
+  // Private Teile (Agenten, Proxy, Import, Verbrauch ...) nur mit Zugangs-Pfad, egal was nginx schickt
+  if (z.length >= 16 && req.method !== "OPTIONS" && !mitSchluessel(req) && vonAussen(req)
+      && !OEFFENTLICH.some((r) => r.test(p))) {
+    json(res, 401, { error: "Kein Zugang" }, CORS);
+    return true;
+  }
   const unsere = p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status"
               || p === "/manifest.webmanifest" || p === "/icon.svg";
   if (!unsere) return false;
@@ -360,7 +386,7 @@ async function behandle(req, res, url, CORS) {
     for (const n of Object.keys(ANBIETER)) {
       anbieter[n] = { schluessel: !!schluessel(ANBIETER[n].keys), frei: ANBIETER[n].frei,
                       gesperrtBis: pause[n] > Date.now() ? new Date(pause[n]).toISOString() : null,
-                      modelle: listen[n] ? listen[n].ids.length : null };
+                      modelle: listen[n] ? listen[n].ids.length : null, letzterFehler: fehlerJe[n] || null };
     }
     const g = zaehler.frei + zaehler.bezahlt;
     json(res, 200, { ok: true, anbieter, zaehler, freiAnteil: g ? Math.round(zaehler.frei / g * 100) + "%" : "-",

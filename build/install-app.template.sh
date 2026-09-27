@@ -202,6 +202,13 @@ if [ -n "$HAT" ]; then
       -d '{"system":"Antworte nur mit OK.","messages":[{"role":"user","content":"Test"}],"max_tokens":20}')
   ANB=$(echo "$T" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.ok?j.anbieter+" / "+j.modell+(j.frei?" (gratis)":" (Abo)"):"FEHLER "+(j.error||"")+" "+JSON.stringify(j.versuche||[]).slice(0,300))}catch(e){console.log("FEHLER keine Antwort")}})')
   case "$ANB" in FEHLER*) nein "KI: $ANB" ;; *) ok "KI antwortet: $ANB" ;; esac
+  echo "$T" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{for(const v of (JSON.parse(d).versuche||[]))console.log("          uebersprungen: "+v.anbieter+" ("+v.modell+") -> "+(v.status||"netz")+" "+String(v.fehler||"").slice(0,110))}catch(e){}})'
+  for P in groq gemini openrouter cohere mistral together; do
+    echo "$HAT" | grep -qw "$P" || continue
+    TP=$(curl -s --max-time 60 "localhost:$PORT/k/$ZUGANG/llm" -H 'Content-Type: application/json' \
+        -d "{\"modell\":\"$( [ $P = groq ] && echo llama || { [ $P = together ] && echo auto || echo $P; } )\",\"messages\":[{\"role\":\"user\",\"content\":\"Sag OK\"}],\"max_tokens\":20}")
+    echo "$TP" | P=$P node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d),p=process.env.P;const f=(j.versuche||[]).find(v=>v.anbieter===p);if(j.ok&&j.anbieter===p)console.log("  \x1b[1;32mOK\x1b[0m      "+p+": "+j.modell);else console.log("  \x1b[1;33mHINWEIS\x1b[0m "+p+": "+(f?(f.status||"netz")+" "+String(f.fehler).slice(0,120):"kein passendes Gratis-Modell"))}catch(e){}})'
+  done
 fi
 
 # ---------------------------------------------------------------------
@@ -214,6 +221,8 @@ if [ -n "$HTTPS" ]; then LINK="https://$DOMAIN/k/$ZUGANG/app"; else LINK="http:/
 echo -e "${B}  DEINE APP (am Handy oeffnen):${N}"
 echo
 echo -e "  ${G}$LINK${N}"
+echo "$LINK" > "$ORDNER/APP-LINK.txt"; chmod 600 "$ORDNER/APP-LINK.txt"
+echo "  (Link auch gespeichert: cat $ORDNER/APP-LINK.txt)"
 echo
 echo "  Dann im Browser-Menue: 'Zum Startbildschirm hinzufuegen'."
 echo "  Deine 12 Agenten vom Handy: in der ALTEN App Zahnrad -> 'Daten sichern',"
