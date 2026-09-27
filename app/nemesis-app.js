@@ -1,0 +1,386 @@
+/* ===========================================================
+   NEMESIS APP-MODUL  ·  nemesis-app.js
+   Wird von nemesis-sync.js gerufen (eine Zeile, vom Installer).
+
+   Liefert:
+     GET  /app                  -> die Nemesis-Lab-App (nur mit Zugangs-Pfad)
+     GET  /manifest.webmanifest -> damit die App aufs Handy-Home kann
+     POST /llm                  -> KI-Anfrage, Schluessel bleiben auf dem Server
+     GET  /llm/status           -> welche Anbieter bereit sind, Verbrauch
+
+   Alles unter /app und /llm geht NUR ueber /k/<NEMESIS_ZUGANG>/...
+   Node 18+, keine Abhaengigkeiten.
+   =========================================================== */
+
+const fs = require("fs");
+const path = require("path");
+
+const DIR = __dirname;
+const APP_DATEI = path.join(DIR, "nemesis-app.html");
+
+/* ---------- Schluessel: aus Umgebung, sonst aus .env daneben ---------- */
+let envCache = null, envZeit = 0;
+function dotenv() {
+  if (envCache && Date.now() - envZeit < 60000) return envCache;
+  const e = {};
+  try {
+    for (const z of fs.readFileSync(path.join(DIR, ".env"), "utf8").split(/\r?\n/)) {
+      const m = z.match(/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      if (m) e[m[1]] = m[2].replace(/^['"]|['"]$/g, "");
+    }
+  } catch (err) {}
+  envCache = e; envZeit = Date.now();
+  return e;
+}
+function schluessel(namen) {
+  const d = dotenv();
+  for (const n of namen) {
+    const v = process.env[n] || d[n];
+    if (v && v.length > 8) return v;
+  }
+  // Andere Schreibweisen, z.B. GROQ_KEY_1, NEMESIS_GEMINI_KEY
+  const stamm = namen[0].split("_")[0];
+  const re = new RegExp("(^|_)" + stamm + "(_|$).*(KEY|TOKEN)", "i");
+  for (const quelle of [process.env, d]) {
+    for (const k of Object.keys(quelle)) {
+      if (re.test(k) && !/ADMIN|ZUGANG/.test(k) && String(quelle[k]).length > 8) return String(quelle[k]);
+    }
+  }
+  return "";
+}
+
+/* ---------- Anbieter ---------- */
+const ANBIETER = {
+  groq:       { frei: true,  url: "https://api.groq.com/openai/v1/chat/completions",
+                liste: "https://api.groq.com/openai/v1/models", keys: ["GROQ_API_KEY", "GROQ_KEY"],
+                standard: "llama-3.3-70b-versatile" },
+  openrouter: { frei: true,  url: "https://openrouter.ai/api/v1/chat/completions",
+                liste: "https://openrouter.ai/api/v1/models", keys: ["OPENROUTER_API_KEY", "OPENROUTER_KEY"],
+                nurFrei: /:free$/i, standard: "" },
+  gemini:     { frei: true,  url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                liste: "https://generativelanguage.googleapis.com/v1beta/openai/models",
+                keys: ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_AI_API_KEY", "GOOGLE_GEMINI_API_KEY"],
+                standard: "gemini-2.5-flash" },
+  cohere:     { frei: true,  url: "https://api.cohere.ai/compatibility/v1/chat/completions",
+                liste: "https://api.cohere.com/v1/models", keys: ["COHERE_API_KEY", "CO_API_KEY"],
+                standard: "command-r-08-2024" },
+  mistral:    { frei: true,  url: "https://api.mistral.ai/v1/chat/completions",
+                liste: "https://api.mistral.ai/v1/models", keys: ["MISTRAL_API_KEY"],
+                standard: "mistral-small-latest" },
+  together:   { frei: true,  url: "https://api.together.xyz/v1/chat/completions",
+                liste: "https://api.together.xyz/v1/models", keys: ["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"],
+                nurFrei: /free/i, standard: "" },
+  openai:     { frei: false, url: "https://api.openai.com/v1/chat/completions",
+                liste: "https://api.openai.com/v1/models", keys: ["OPENAI_API_KEY"],
+                standard: "gpt-4o-mini" },
+};
+
+// Modelle, die keine Chat-Modelle sind
+const KEIN_CHAT = /embed|tts|whisper|audio|image|dall-e|guard|moderation|realtime|transcribe|rerank|search|vision-preview|playai|compound|sora|computer-use|codex/i;
+
+/* ---------- Routing: was fuer welche Aufgabe (gratis zuerst, OpenAI zuletzt) ---------- */
+const WAHL = {
+  code: [
+    ["groq", [/qwen.*coder/i, /qwen3/i, /gpt-oss-120b/i]],
+    ["openrouter", [/qwen3-coder.*:free/i, /coder.*:free/i, /gpt-oss-120b.*:free/i]],
+    ["mistral", [/codestral/i, /devstral/i]],
+    ["gemini", [/flash-lite/i, /flash/i]],
+    ["groq", [/llama-3\.3-70b/i]],
+    ["openai", [/^gpt-5\.4-mini/i, /^gpt-5(\.\d)?-mini/i, /^gpt-4\.1-mini/i, /^gpt-4o-mini$/i]],
+  ],
+  denken: [
+    ["openrouter", [/nemotron.*ultra.*:free/i, /nemotron.*:free/i, /gpt-oss-120b.*:free/i, /deepseek.*r1.*:free/i]],
+    ["groq", [/gpt-oss-120b/i, /llama-3\.3-70b/i]],
+    ["gemini", [/^gemini-[\d.]+-flash$/i, /flash(?!-lite)/i]],
+    ["cohere", [/command-a/i, /command-r-plus/i]],
+    ["openai", [/^gpt-5\.5$/i, /^gpt-5\.5/i, /^gpt-5(\.\d)?$/i, /^gpt-4\.1$/i, /^gpt-4o$/i]],
+  ],
+  lang: [
+    ["gemini", [/flash-lite/i, /flash/i]],
+    ["openrouter", [/gemini.*flash.*:free/i]],
+    ["openai", [/^gpt-5\.4-mini/i, /^gpt-5(\.\d)?-mini/i, /^gpt-4\.1-mini/i, /^gpt-4o-mini$/i]],
+  ],
+  normal: [
+    ["groq", [/gpt-oss-120b/i, /llama-3\.3-70b/i]],
+    ["gemini", [/flash-lite/i, /flash/i]],
+    ["cohere", [/command-a/i, /command-r/i]],
+    ["openrouter", [/nemotron.*:free/i, /gpt-oss.*:free/i, /qwen.*:free/i, /llama.*70b.*:free/i, /:free$/i]],
+    ["mistral", [/^mistral-small/i, /small/i]],
+    ["together", [/free/i]],
+    ["openai", [/^gpt-5\.4-mini/i, /^gpt-5(\.\d)?-mini/i, /^gpt-4\.1-mini/i, /^gpt-4o-mini$/i]],
+  ],
+};
+
+// Manuell: "!model <key>" in der Nachricht oder Modell-Wahl im Zahnrad
+const HAND = {
+  gemini:     [["gemini", [/flash-lite/i, /flash/i]]],
+  nemotron:   [["openrouter", [/nemotron.*ultra.*:free/i, /nemotron.*:free/i]], ["groq", [/nemotron/i]]],
+  qwen:       [["groq", [/qwen.*coder/i, /qwen/i]], ["openrouter", [/qwen3-coder.*:free/i, /qwen.*:free/i]]],
+  cohere:     [["cohere", [/command-a/i, /command-r/i]]],
+  gptoss:     [["groq", [/gpt-oss-120b/i]], ["openrouter", [/gpt-oss-120b.*:free/i, /gpt-oss.*:free/i]]],
+  mistral:    [["mistral", [/^mistral-small/i, /small/i]]],
+  llama:      [["groq", [/llama-3\.3-70b/i, /llama/i]], ["openrouter", [/llama.*:free/i]]],
+  openrouter: [["openrouter", [/:free$/i]]],
+  gpt55:      [["openai", [/^gpt-5\.5$/i, /^gpt-5\.5/i, /^gpt-5(\.\d)?$/i]]],
+  gpt54mini:  [["openai", [/^gpt-5\.4-mini/i, /^gpt-5(\.\d)?-mini/i, /^gpt-4o-mini$/i]]],
+};
+
+/* ---------- Zustand im Speicher ---------- */
+const listen = {};            // anbieter -> { ids, zeit }
+const pause = {};             // anbieter -> bis wann gesperrt (ms)
+const zaehler = { anfragen: 0, frei: 0, bezahlt: 0, fehler: 0, proAnbieter: {}, seit: new Date().toISOString() };
+let letzterFehler = null;
+
+async function holeJSON(url, key, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms || 8000);
+  try {
+    const r = await fetch(url, { headers: { Authorization: "Bearer " + key }, signal: ctrl.signal });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; } finally { clearTimeout(t); }
+}
+
+async function modellListe(name) {
+  const a = ANBIETER[name];
+  const c = listen[name];
+  if (c && Date.now() - c.zeit < 6 * 3600 * 1000) return c.ids;
+  const key = schluessel(a.keys);
+  const d = await holeJSON(a.liste, key);
+  let ids = [];
+  if (d) {
+    const roh = Array.isArray(d) ? d : (d.data || d.models || []);
+    ids = roh.map((m) => String(m.id || m.name || "").replace(/^models\//, "")).filter(Boolean);
+  }
+  ids = ids.filter((id) => !KEIN_CHAT.test(id));
+  if (a.nurFrei) ids = ids.filter((id) => a.nurFrei.test(id));
+  // Neueste zuerst, Vorschau-Versionen nach hinten
+  ids.sort((x, y) => {
+    const px = /preview|exp|beta/i.test(x) ? 1 : 0, py = /preview|exp|beta/i.test(y) ? 1 : 0;
+    return px - py || y.localeCompare(x, "en", { numeric: true });
+  });
+  if (!ids.length && a.standard) ids = [a.standard];
+  listen[name] = { ids, zeit: ids.length > 1 ? Date.now() : Date.now() - 5.5 * 3600 * 1000 };
+  return ids;
+}
+
+function bereit(name) {
+  return !!schluessel(ANBIETER[name].keys) && !(pause[name] > Date.now());
+}
+
+async function kandidaten(plan) {
+  const out = [], gesehen = new Set();
+  for (const [name, muster] of plan) {
+    if (!ANBIETER[name] || !bereit(name)) continue;
+    const ids = await modellListe(name);
+    for (const re of muster) {
+      const id = ids.find((x) => re.test(x));
+      if (id && !gesehen.has(name + ":" + id)) { gesehen.add(name + ":" + id); out.push({ name, id }); break; }
+    }
+  }
+  return out;
+}
+
+function aufgabe(system, messages) {
+  const alles = (system || "") + " " + messages.map((m) => (typeof m.content === "string" ? m.content : "")).join(" ");
+  if (alles.length > 60000) return "lang";
+  const letzte = [...messages].reverse().find((m) => m.role === "user");
+  const t = String((letzte && letzte.content) || "").slice(0, 4000);
+  if (/\b(code|coden|javascript|typescript|python|html|css|sql|regex|script|bug|funktion|node\.?js|api-endpunkt|bash)\b/i.test(t)) return "code";
+  if (/(analys|strateg|begr[uü]nd|schritt f[uü]r schritt|warum|vergleich|bewert|plan(e|ung)|entscheid|pr[uü]fe gr[uü]ndlich)/i.test(t)) return "denken";
+  return "normal";
+}
+
+function textAus(d) {
+  if (!d) return "";
+  const c = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
+  if (typeof c === "string") return c.trim();
+  if (Array.isArray(c)) return c.map((x) => x.text || "").join("\n").trim();
+  if (d.message && Array.isArray(d.message.content)) return d.message.content.map((x) => x.text || "").join("\n").trim();
+  if (Array.isArray(d.content)) return d.content.map((x) => x.text || "").join("\n").trim();
+  return "";
+}
+
+async function frage(k, system, messages, maxTokens, restMs) {
+  const a = ANBIETER[k.name];
+  const body = {
+    model: k.id,
+    messages: (system ? [{ role: "system", content: system }] : []).concat(messages),
+  };
+  if (k.name === "openai" && /^(gpt-5|o\d)/i.test(k.id)) {
+    body.max_completion_tokens = Math.max(maxTokens, 2500);   // Denk-Modelle brauchen Luft
+    body.reasoning_effort = "low";
+  } else {
+    body.max_tokens = maxTokens;
+  }
+  const headers = { "Content-Type": "application/json", Authorization: "Bearer " + schluessel(a.keys) };
+  if (k.name === "openrouter") { headers["HTTP-Referer"] = "https://nemesis-studio-ai.ch"; headers["X-Title"] = "Nemesis Lab"; }
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), Math.min(55000, Math.max(8000, restMs)));
+  try {
+    const r = await fetch(a.url, { method: "POST", headers, body: JSON.stringify(body), signal: ctrl.signal });
+    const roh = await r.text();
+    let d = null; try { d = JSON.parse(roh); } catch (e) {}
+    if (!r.ok) {
+      const msg = (d && (d.error && (d.error.message || d.error) || d.message)) || roh.slice(0, 160);
+      return { ok: false, status: r.status, msg: String(typeof msg === "string" ? msg : JSON.stringify(msg)).slice(0, 200),
+               warte: Number(r.headers.get("retry-after")) || 0 };
+    }
+    const text = textAus(d);
+    if (!text) return { ok: false, status: 200, msg: "leere Antwort" };
+    return { ok: true, text };
+  } catch (e) {
+    return { ok: false, status: 0, msg: e.name === "AbortError" ? "Zeitueberschreitung" : e.message };
+  } finally { clearTimeout(t); }
+}
+
+async function rotiere(einsatz) {
+  let { system, messages, max_tokens, modell } = einsatz;
+  messages = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && m.content != null)
+    .map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }));
+  if (!messages.length) return { status: 400, body: { error: "Keine Nachricht" } };
+  const maxTokens = Math.min(Math.max(Number(max_tokens) || 1200, 64), 8000);
+
+  // "!model <key>" in der letzten Nachricht
+  const li = messages.length - 1;
+  const m = messages[li].role === "user" && messages[li].content.match(/^\s*!model\s+(\S+)\s*/i);
+  if (m) { modell = m[1]; messages[li] = { role: "user", content: messages[li].content.slice(m[0].length) || "Hallo" }; }
+  modell = String(modell || "auto").toLowerCase().replace(/[^a-z0-9:._\/-]/g, "");
+
+  const art = aufgabe(system, messages);
+  let plan;
+  if (modell && modell !== "auto") {
+    if (HAND[modell]) plan = HAND[modell];
+    else if (modell.includes(":") && ANBIETER[modell.split(":")[0]]) {
+      const [name, ...rest] = modell.split(":"); const id = rest.join(":");
+      plan = [[name, [new RegExp("^" + id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i")]]];
+      listen[name] = listen[name] || { ids: [id], zeit: 0 };
+      if (!listen[name].ids.includes(id)) listen[name].ids.unshift(id);
+    } else {
+      return { status: 400, body: { error: "Unbekanntes Modell '" + modell + "'. Moeglich: auto, " + Object.keys(HAND).join(", ") } };
+    }
+    plan = plan.concat(WAHL[art]);          // Wenn das gewaehlte ausfaellt: automatisch weiter
+  } else {
+    plan = WAHL[art];
+  }
+
+  const liste = await kandidaten(plan);
+  if (!liste.length) {
+    const hat = Object.keys(ANBIETER).filter((n) => schluessel(ANBIETER[n].keys));
+    return { status: 503, body: { error: hat.length
+      ? "Alle Anbieter gerade gesperrt oder ohne passendes Modell (" + hat.join(", ") + "). Kurz warten."
+      : "Auf dem Server ist kein einziger KI-Schluessel hinterlegt (.env: GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY ...)." } };
+  }
+
+  const start = Date.now(), budget = 100000, versuche = [];
+  zaehler.anfragen++;
+  for (const k of liste) {
+    const rest = budget - (Date.now() - start);
+    if (rest < 6000) break;
+    const r = await frage(k, system, messages, maxTokens, rest);
+    if (r.ok) {
+      const frei = ANBIETER[k.name].frei;
+      zaehler[frei ? "frei" : "bezahlt"]++;
+      zaehler.proAnbieter[k.name] = (zaehler.proAnbieter[k.name] || 0) + 1;
+      return { status: 200, body: {
+        ok: true, text: r.text, anbieter: k.name, modell: k.id, aufgabe: art, frei, versuche,
+        choices: [{ message: { role: "assistant", content: r.text } }] } };
+    }
+    versuche.push({ anbieter: k.name, modell: k.id, status: r.status, fehler: r.msg });
+    if (r.status === 429) pause[k.name] = Date.now() + Math.min(Math.max(r.warte, 30), 300) * 1000;
+    else if (r.status === 401 || r.status === 403) pause[k.name] = Date.now() + 10 * 60 * 1000;
+    else if (r.status === 404) { if (listen[k.name]) listen[k.name].zeit = 0; }
+    else if (r.status >= 500 || r.status === 0) pause[k.name] = Date.now() + 20 * 1000;
+  }
+  zaehler.fehler++;
+  letzterFehler = { zeit: new Date().toISOString(), versuche };
+  return { status: 503, body: { error: "Kein Modell hat geantwortet", versuche } };
+}
+
+/* ---------- Kleinkram ---------- */
+function json(res, code, obj, CORS) {
+  res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...CORS });
+  res.end(JSON.stringify(obj));
+}
+async function lies(req, max) {
+  let raw = "";
+  for await (const c of req) { raw += c; if (raw.length > max) throw new Error("zu gross"); }
+  return raw;
+}
+function mitSchluessel(req) {
+  // Nur ueber den geheimen Pfad. Kein "lokal"-Ausweg: hinter nginx sieht alles lokal aus.
+  const z = process.env.NEMESIS_ZUGANG || dotenv().NEMESIS_ZUGANG || "";
+  if (z.length < 16) return false;
+  const u = String(req.url || "");
+  return u === "/k/" + z || u.startsWith("/k/" + z + "/") || u.startsWith("/k/" + z + "?");
+}
+
+const MANIFEST = JSON.stringify({
+  name: "Nemesis Lab", short_name: "Nemesis", start_url: "./app", scope: "./", display: "standalone",
+  background_color: "#06060B", theme_color: "#06060B",
+  icons: [{ src: "./icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" }],
+});
+const ICON = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' fill='#06060B'/><path d='M32 10 L54 32 L32 54 L10 32 Z' fill='none' stroke='#FF2D78' stroke-width='5'/></svg>";
+
+/* ---------- Router ---------- */
+async function behandle(req, res, url, CORS) {
+  let p = url.pathname;
+  const z = process.env.NEMESIS_ZUGANG || dotenv().NEMESIS_ZUGANG || "";
+  if (z.length >= 16 && (p === "/k/" + z || p.startsWith("/k/" + z + "/"))) p = p.slice(z.length + 3) || "/";
+  const unsere = p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status"
+              || p === "/manifest.webmanifest" || p === "/icon.svg";
+  if (!unsere) return false;
+
+  if (!mitSchluessel(req)) {
+    json(res, 401, { error: "Kein Zugang", hilfe: "App nur ueber deinen Link /k/<Zugang>/app oeffnen." }, CORS);
+    return true;
+  }
+
+  if (p === "/app" || p === "/app/") {
+    let html;
+    try { html = fs.readFileSync(APP_DATEI, "utf8"); }
+    catch (e) { json(res, 500, { error: "nemesis-app.html fehlt neben nemesis-app.js" }, CORS); return true; }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache",
+                         "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex" });
+    res.end(html);
+    return true;
+  }
+  if (p === "/manifest.webmanifest") {
+    res.writeHead(200, { "Content-Type": "application/manifest+json", "Cache-Control": "no-cache" });
+    res.end(MANIFEST); return true;
+  }
+  if (p === "/icon.svg") {
+    res.writeHead(200, { "Content-Type": "image/svg+xml", "Cache-Control": "max-age=86400" });
+    res.end(ICON); return true;
+  }
+
+  if (p === "/llm/status") {
+    const anbieter = {};
+    for (const n of Object.keys(ANBIETER)) {
+      anbieter[n] = { schluessel: !!schluessel(ANBIETER[n].keys), frei: ANBIETER[n].frei,
+                      gesperrtBis: pause[n] > Date.now() ? new Date(pause[n]).toISOString() : null,
+                      modelle: listen[n] ? listen[n].ids.length : null };
+    }
+    const g = zaehler.frei + zaehler.bezahlt;
+    json(res, 200, { ok: true, anbieter, zaehler, freiAnteil: g ? Math.round(zaehler.frei / g * 100) + "%" : "-",
+                     letzterFehler, handModelle: ["auto"].concat(Object.keys(HAND)) }, CORS);
+    return true;
+  }
+
+  if (p === "/llm") {
+    if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
+    if (req.method !== "POST") { json(res, 405, { error: "POST erwartet" }, CORS); return true; }
+    let einsatz;
+    try { einsatz = JSON.parse(await lies(req, 4 * 1024 * 1024)); }
+    catch (e) { json(res, 400, { error: "Kein gueltiges JSON oder zu gross" }, CORS); return true; }
+    const r = await rotiere(einsatz || {});
+    if (r.status === 200) console.log("[llm] " + r.body.anbieter + " " + r.body.modell + " (" + r.body.aufgabe + ")");
+    else console.log("[llm] Fehler: " + (r.body.error || "") + " " + JSON.stringify(r.body.versuche || []).slice(0, 300));
+    json(res, r.status, r.body, CORS);
+    return true;
+  }
+  return false;
+}
+
+module.exports = { behandle, rotiere, aufgabe, _intern: { ANBIETER, WAHL, HAND, listen, pause } };

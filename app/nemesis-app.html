@@ -43,6 +43,7 @@
   <label>Anbieter</label>
   <select id="nxPreset" onchange="NX.preset(this.value)">
     <option value="">— ausw&auml;hlen —</option>
+    <option value="nemesis">Nemesis-Server · Gratis-Rotator (kein Key) ⭐</option>
     <option value="anthropic">Anthropic · Claude</option>
     <option value="openai">OpenAI · GPT</option>
     <option value="groq">Groq 🆓 (gratis)</option>
@@ -82,14 +83,51 @@
     <button class="b g" onclick="NX.close()">Schlie&szlig;en</button>
   </div>
 
+  <div class="row">
+    <button class="b g" onclick="NX.test()">Verbindung testen</button>
+  </div>
+  <div id="nxTest" style="display:none;font-size:13.5px;line-height:1.7;background:#0E0E18;border:1px solid #26263F;border-radius:10px;padding:12px 14px;margin-top:10px"></div>
   <div class="hint">
-    L&auml;uft das Modell auf deinem Droplet oder per Ollama, muss der Server CORS erlauben, sonst blockt der Browser die Verbindung. Beim Nemesis-Server ist das bereits eingestellt.
+    Tipp: &Ouml;ffne die App &uuml;ber deinen Server-Link (<b>…/k/&lt;Zugang&gt;/app</b>). Dann ist alles automatisch eingestellt, und mit &laquo;Nemesis-Server&raquo; brauchst du auf dem Handy keinen einzigen Schl&uuml;ssel.
   </div>
   <div class="row">
     <button class="b g" onclick="NX.exportAll()">Daten sichern</button>
     <button class="b g" onclick="NX.importAll()">Daten einspielen</button>
   </div>
 </div></div>
+
+<script>
+/* ---------- NEMESIS: Server-Erkennung + Netz-Diagnose ---------- */
+(function(){
+  try {
+    var m = location.protocol.indexOf("http")===0 && location.pathname.match(/^(.*?)\/app\/?$/);
+    if (!m) return;
+    var base = location.origin + m[1];
+    window.NX_SERVER = base;
+    var cl = {}; try { cl = JSON.parse(localStorage.getItem("nx:cloud")||"{}"); } catch(e){}
+    if (cl.url !== base) { cl.url = base; cl.raum = cl.raum || "nemesis"; localStorage.setItem("nx:cloud", JSON.stringify(cl)); }
+    var c = {}; try { c = JSON.parse(localStorage.getItem("nx:cfg")||"{}"); } catch(e){}
+    var lokalSeite = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+    var lokalZiel = /localhost|127\.0\.0\.1/.test(c.endpoint||"");
+    var kaputt = !c.endpoint || (!c.key && !lokalZiel) || (lokalZiel && !lokalSeite);
+    if (c.provider === "nemesis" || kaputt)
+      localStorage.setItem("nx:cfg", JSON.stringify({ provider:"nemesis", endpoint: base + "/llm", model: (c.provider==="nemesis" && c.model) || "auto", key: "" }));
+  } catch(e){}
+})();
+window.nxServer = function(){
+  if (window.NX_SERVER) return window.NX_SERVER;
+  try { var cl = JSON.parse(localStorage.getItem("nx:cloud")||"{}"); return String(cl.url||"").trim().replace(/\/+$/,""); } catch(e){ return ""; }
+};
+window.netzText = function(url){
+  var u = String(url||"");
+  var lokalSeite = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  if (location.protocol==="https:" && u.indexOf("http:")===0) return "Der Browser blockt http-Adressen auf einer https-Seite. Die Adresse muss mit https:// beginnen.";
+  if (/localhost|127\.0\.0\.1/.test(u) && !lokalSeite) return "'localhost' zeigt auf dieses Geraet, nicht auf deinen Server. Im Zahnrad 'Nemesis-Server' waehlen.";
+  var srv = window.nxServer();
+  if (srv && u.indexOf(new URL(srv, location.href).origin)===0) return "Server nicht erreichbar (offline, Firewall oder Antwort zu langsam). Im Zahnrad 'Verbindung testen' druecken.";
+  return "Der Anbieter blockt Direktzugriffe aus dem Browser (CORS). Im Zahnrad 'Nemesis-Server' waehlen, dann laeuft alles ueber deinen Server.";
+};
+</script>
 
 <script>
 /* ---------- Speicher: gleiche Schnittstelle wie in der Vorschau, nur lokal ---------- */
@@ -108,10 +146,28 @@ window.NX = {
     var ms=document.getElementById("nxModelSelect"); if(ms){ms.innerHTML="<option value=''>"+(c.model?"Gespeichert: "+c.model:"— Anbieter wählen →")+"</option>";}
     var kh=document.getElementById("nxKeyHint"); if(kh) kh.style.display="none";
     var cl={}; try{ cl=JSON.parse(localStorage.getItem("nx:cloud")||"{}"); }catch(e){}
-    nxCloudUrl.value=cl.url||""; nxCloudRaum.value=cl.raum||"";
+    nxCloudUrl.value=cl.url||window.NX_SERVER||""; nxCloudRaum.value=cl.raum||"";
+    var ps=document.getElementById("nxPreset"); if(ps) ps.value=(c.provider==="nemesis")?"nemesis":"";
+    var tt=document.getElementById("nxTest"); if(tt) tt.style.display="none";
     document.getElementById("nxset").style.display="block"; },
   close(){ document.getElementById("nxset").style.display="none"; },
   PROVIDERS:{
+    nemesis:{
+      url:"",
+      hint:"Laeuft ueber deinen Server mit dessen Schluesseln. Gratis-Modelle zuerst, OpenAI nur als Rettung. Kein Key noetig.",
+      models:[
+        {v:"auto",l:"Automatisch (beste Wahl je Aufgabe) ⭐"},
+        {v:"gemini",l:"Gemini Flash (langer Kontext)"},
+        {v:"nemotron",l:"Nemotron (schweres Denken)"},
+        {v:"qwen",l:"Qwen Coder (Code)"},
+        {v:"gptoss",l:"GPT-OSS 120B"},
+        {v:"llama",l:"Llama 3.3 70B"},
+        {v:"cohere",l:"Cohere Command"},
+        {v:"mistral",l:"Mistral Small"},
+        {v:"gpt54mini",l:"GPT-5.4 mini (OpenAI-Abo)"},
+        {v:"gpt55",l:"GPT-5.5 (OpenAI-Abo)"}
+      ]
+    },
     anthropic:{
       url:"https://api.anthropic.com/v1/messages",
       hint:"Key holen: console.anthropic.com → API Keys. Ab $5 Guthaben nutzbar.",
@@ -218,25 +274,58 @@ window.NX = {
   },
   preset(p){
     const pr=this.PROVIDERS[p]; if(!pr) return;
-    nxEndpoint.value=pr.url;
+    nxEndpoint.value = p==="nemesis" ? (((nxCloudUrl.value.trim().replace(/\/+$/,""))||window.NX_SERVER||"https://DEINE-DOMAIN/k/ZUGANG")+"/llm") : pr.url;
     const hint=document.getElementById("nxKeyHint");
     hint.textContent=pr.hint; hint.style.display="block";
     const sel=document.getElementById("nxModelSelect");
     sel.innerHTML=pr.models.map(m=>`<option value="${m.v}">${m.l}</option>`).join("");
     if(pr.models.length>0){ nxModel.value=pr.models[0].v; }
-    const noKey=["ollama","lmstudio"];
+    const noKey=["ollama","lmstudio","nemesis"];
     document.getElementById("nxKey").placeholder=noKey.includes(p)?"(nicht nötig)":"sk-... / API Key eingeben";
   },
   pickModel(v){ if(v) nxModel.value=v; },
   save(){
+    const ep=nxEndpoint.value.trim(), nem=/\/llm\/?$/.test(ep);
     localStorage.setItem("nx:cfg", JSON.stringify({
-      endpoint:nxEndpoint.value.trim(), model:nxModel.value.trim(), key:nxKey.value.trim()
+      provider: nem?"nemesis":"", endpoint:ep, model:(nxModel.value.trim()||(nem?"auto":"")), key: nem?"":nxKey.value.trim()
     }));
     localStorage.setItem("nx:cloud", JSON.stringify({
-      url:nxCloudUrl.value.trim(), raum:(nxCloudRaum.value.trim()||"nemesis")
+      url:nxCloudUrl.value.trim().replace(/\/+$/,""), raum:(nxCloudRaum.value.trim()||"nemesis")
     }));
     this.close();
     location.reload();
+  },
+  async test(){
+    var out=document.getElementById("nxTest"); out.style.display="block"; out.innerHTML="Pruefe …";
+    var z=[]; function add(ok,t){ z.push((ok===true?"✅ ":ok===false?"❌ ":"• ")+t); out.innerHTML=z.map(function(x){return "<div>"+x.replace(/&/g,"&amp;").replace(/</g,"&lt;")+"</div>";}).join(""); }
+    var base=(nxCloudUrl.value.trim()||"").replace(/\/+$/,"") || window.NX_SERVER || "";
+    var lokalSeite=/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+    add(null,"Seite: "+location.origin);
+    if(!base){ add(false,"Keine Cloud-Adresse. Trag den Link aus dem Installer ein (endet auf /k/<Zugang>)."); }
+    else {
+      var origin=""; try{ origin=new URL(base).origin; }catch(e){ add(false,"Cloud-Adresse ist keine gueltige Adresse."); }
+      if(location.protocol==="https:" && base.indexOf("http:")===0) add(false,"http-Adresse auf https-Seite wird geblockt → mit https:// eintragen.");
+      if(/localhost|127\.0\.0\.1/.test(base) && !lokalSeite) add(false,"localhost = dieses Geraet, nicht dein Server.");
+      if(!/\/k\/[^\/]{16,}$/.test(base)) add(false,"Adresse endet nicht auf /k/<Zugang> → Server sperrt deine Agenten (401).");
+      if(origin){
+        try{ var r=await fetch(origin+"/health",{cache:"no-store"}); add(r.ok,"Server erreichbar ("+r.status+")"); }catch(e){ add(false,"Server: "+window.netzText(origin)); }
+        try{ var r2=await fetch(base+"/state?raum="+encodeURIComponent(nxCloudRaum.value.trim()||"nemesis"),{cache:"no-store"}); add(r2.ok, r2.ok?"Agenten-Speicher OK":"Agenten-Speicher: Fehler "+r2.status+(r2.status===401?" (Zugang fehlt oder falsch)":"")); }catch(e){ add(false,"Agenten-Speicher: "+window.netzText(base)); }
+        try{ var r3=await fetch(base+"/llm/status",{cache:"no-store"});
+          if(r3.ok){ var d=await r3.json(); var an=Object.keys(d.anbieter).filter(function(k){return d.anbieter[k].schluessel;}); add(an.length>0,"KI-Schluessel auf dem Server: "+(an.join(", ")||"keine")+(d.freiAnteil&&d.freiAnteil!=="-"?" · Gratis-Anteil "+d.freiAnteil:"")); }
+          else add(false,"Gratis-Rotator fehlt auf dem Server ("+r3.status+") → Installer laufen lassen.");
+        }catch(e){ add(false,"Gratis-Rotator: "+window.netzText(base)); }
+        try{ var t0=Date.now(); var r4=await fetch(base+"/llm",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:"Antworte nur mit OK.",messages:[{role:"user",content:"Test"}],max_tokens:20})});
+          var d4={}; try{ d4=await r4.json(); }catch(e){}
+          add(r4.ok, r4.ok?("KI antwortet: "+d4.anbieter+" · "+d4.modell+" ("+(Date.now()-t0)+" ms)"):("KI-Test: "+(d4.error||("Fehler "+r4.status))+(d4.versuche&&d4.versuche.length?" ["+d4.versuche.map(function(v){return v.anbieter+" "+(v.status||"netz");}).join(", ")+"]":"")));
+        }catch(e){ add(false,"KI-Test: "+window.netzText(base)); }
+      }
+    }
+    var ep=nxEndpoint.value.trim();
+    if(ep && !/\/llm\/?$/.test(ep)){
+      if(/localhost|127\.0\.0\.1/.test(ep) && !lokalSeite) add(false,"Modell zeigt auf localhost → 'Nemesis-Server' waehlen.");
+      else if(ep.indexOf("anthropic")<0 && !base) add(false,"Dieser Anbieter blockt den Browser ohne Server (CORS) → Cloud-Adresse setzen oder 'Nemesis-Server' waehlen.");
+    }
+    add(null,"Fertig.");
   },
   exportAll(){
     const d={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k!=="nx:cfg") d[k]=localStorage.getItem(k);}
@@ -475,80 +564,112 @@ const valueOf = (a) => {
 // PROXY_URL: Wenn gesetzt, werden alle nicht-Anthropic Anfragen über den Sync-Server geleitet
 // Das löst CORS-Probleme mit OpenAI, Groq, Gemini, Mistral etc.
 function getProxyUrl() {
-  try {
-    const cl = JSON.parse(localStorage.getItem("nx:cloud") || "{}");
-    if (cl.url && cl.url.indexOf("localhost") < 0) return cl.url + "/proxy";
-  } catch(e) {}
+  const u = window.nxServer();
+  if (u && !/localhost|127\.0\.0\.1/.test(u)) return u + "/proxy";
   return null;
+}
+
+function antwortText(d) {
+  if (!d) return "";
+  if (Array.isArray(d.content)) return d.content.map((c) => (c.type === "text" ? c.text : "")).join("\n").trim();
+  if (d.choices && d.choices[0]) {
+    const c = d.choices[0].message && d.choices[0].message.content;
+    if (typeof c === "string") return c.trim();
+    if (Array.isArray(c)) return c.map((x) => x.text || "").join("\n").trim();
+  }
+  if (d.message && Array.isArray(d.message.content)) return d.message.content.map((x) => x.text || "").join("\n").trim();
+  if (typeof d.text === "string") return d.text.trim();
+  return "";
 }
 
 async function ask(messages, system, maxTokens = 1200) {
   const cfg = window.NX.cfg();
-  if (!cfg.endpoint) throw new Error("Kein Modell eingerichtet - tippe unten rechts auf das Zahnrad.");
-  const isLocal = cfg.endpoint.indexOf("localhost") > -1 || cfg.endpoint.indexOf("127.0.0.1") > -1;
-  if (!cfg.key && !isLocal) throw new Error("Kein Schluessel hinterlegt - tippe unten rechts auf das Zahnrad.");
+  const srv = window.nxServer();
+  const endpoint = String(cfg.endpoint || "").trim();
+  const istNemesis = cfg.provider === "nemesis" || /\/llm\/?$/.test(endpoint);
+  const isLocal = /localhost|127\.0\.0\.1/.test(endpoint);
+  const routen = [];
+  const viaServer = srv ? {
+    art: "nemesis", url: srv + "/llm", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ system, messages, max_tokens: maxTokens, modell: istNemesis ? (cfg.model || "auto") : "auto" }),
+  } : null;
 
-  const anthropic = cfg.endpoint.indexOf("anthropic") > -1;
-  const proxyUrl = !anthropic && !isLocal ? getProxyUrl() : null;
-
-  // Anthropic: direkt mit speziellem Header (erlaubt CORS)
-  // Alle anderen: über Proxy wenn verfügbar, sonst direkt versuchen
-  let fetchUrl, fetchBody, fetchHeaders;
-
-  if (anthropic) {
-    fetchUrl = cfg.endpoint;
-    fetchHeaders = {
-      "Content-Type": "application/json",
-      "x-api-key": cfg.key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true"
-    };
-    fetchBody = JSON.stringify({ model: cfg.model, max_tokens: maxTokens, system, messages });
-  } else if (proxyUrl) {
-    // Via Proxy: Browser → sync-server → LLM-Anbieter (kein CORS)
-    fetchUrl = proxyUrl;
-    fetchHeaders = { "Content-Type": "application/json" };
-    const llmBody = { model: cfg.model, max_tokens: maxTokens,
-      messages: [{ role: "system", content: system }].concat(messages) };
-    fetchBody = JSON.stringify({ endpoint: cfg.endpoint, key: cfg.key, body: llmBody });
+  if (istNemesis || !endpoint) {
+    if (!viaServer) throw new Error(endpoint
+      ? "Nemesis-Server unbekannt: App ueber deinen Server-Link oeffnen oder im Zahnrad die Cloud-Adresse eintragen."
+      : "Kein Modell eingerichtet - tippe unten rechts auf das Zahnrad.");
+    routen.push(viaServer);
+  } else if (!cfg.key && !isLocal) {
+    if (!viaServer) throw new Error("Kein Schluessel hinterlegt - tippe unten rechts auf das Zahnrad.");
+    routen.push(viaServer);
   } else {
-    // Direkt (für lokale Anbieter oder falls kein Proxy)
-    fetchUrl = cfg.endpoint;
-    fetchHeaders = { "Content-Type": "application/json" };
-    if (cfg.key) fetchHeaders["Authorization"] = "Bearer " + cfg.key;
-    fetchBody = JSON.stringify({ model: cfg.model, max_tokens: maxTokens,
-      messages: [{ role: "system", content: system }].concat(messages) });
-  }
-
-  const body = fetchBody; // alias für weiter unten
-
-  let letzterFehler;
-  for (let versuch = 0; versuch < 3; versuch++) {
-    if (versuch > 0) await new Promise((r) => setTimeout(r, versuch * 1500));
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 90000);
-    try {
-      const r = await fetch(fetchUrl, { method: "POST", headers: fetchHeaders, body: fetchBody, signal: ctrl.signal });
-      clearTimeout(timer);
-      if (r.status === 401) throw new Error("STOP:Schluessel abgelehnt. Pruefe den API-Schluessel im Zahnrad.");
-      if (r.status === 402 || r.status === 403) throw new Error("STOP:Kein Guthaben oder kein Zugriff beim Anbieter. Guthaben aufladen oder Key prüfen.");
-      if (r.status === 429) { letzterFehler = new Error("Zu viele Anfragen - kurz warten."); continue; }
-      if (r.status >= 500) { letzterFehler = new Error("Modell-Server ueberlastet (" + r.status + ")."); continue; }
-      if (!r.ok) {
-        let txt = ""; try { txt = (await r.json()).error?.message || ""; } catch (e) {}
-        throw new Error("STOP:Anfrage abgelehnt (" + r.status + ")" + (txt ? ": " + txt.slice(0, 120) : ""));
-      }
-      const d = await r.json();
-      if (d.content) return d.content.map((c) => (c.type === "text" ? c.text : "")).join("\n").trim();
-      if (d.choices) return String(d.choices[0].message.content).trim();
-      throw new Error("STOP:Unerwartete Antwort vom Modell.");
-    } catch (e) {
-      clearTimeout(timer);
-      if (String(e.message).indexOf("STOP:") === 0) throw new Error(e.message.slice(5));
-      letzterFehler = e.name === "AbortError" ? new Error("Zeitueberschreitung - das Modell hat zu lange gebraucht.") : e;
+    const anthropic = endpoint.indexOf("anthropic") > -1;
+    const proxyUrl = !anthropic && !isLocal ? getProxyUrl() : null;
+    const verlauf = [{ role: "system", content: system }].concat(messages);
+    if (anthropic) {
+      routen.push({ art: "direkt", url: endpoint, headers: {
+        "Content-Type": "application/json", "x-api-key": cfg.key,
+        "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, system, messages }) });
+    } else if (proxyUrl) {
+      routen.push({ art: "proxy", url: proxyUrl, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endpoint, key: cfg.key, body: { model: cfg.model, max_tokens: maxTokens, messages: verlauf } }) });
+    } else {
+      const h = { "Content-Type": "application/json" };
+      if (cfg.key) h["Authorization"] = "Bearer " + cfg.key;
+      routen.push({ art: "direkt", url: endpoint, headers: h,
+        body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, messages: verlauf }) });
     }
+    if (viaServer) routen.push(viaServer);      // Rettungsweg: faellt das eigene Modell aus, uebernimmt der Server
   }
-  throw new Error((letzterFehler && letzterFehler.message) || "Modell nicht erreichbar. Netz pruefen.");
+
+  const fehler = [];
+  for (const rt of routen) {
+    let letzter = "";
+    for (let versuch = 0; versuch < 3; versuch++) {
+      if (versuch > 0) await new Promise((r) => setTimeout(r, versuch * 1500));
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), rt.art === "nemesis" ? 120000 : 90000);
+      let r;
+      try {
+        r = await fetch(rt.url, { method: "POST", headers: rt.headers, body: rt.body, signal: ctrl.signal });
+      } catch (e) {
+        clearTimeout(timer);
+        if (e.name === "AbortError") { letzter = "Zeitueberschreitung - das Modell hat zu lange gebraucht."; break; }
+        letzter = window.netzText(rt.url);
+        if (versuch >= 1) break;               // Netzfehler: einmal wiederholen, dann naechster Weg
+        continue;
+      }
+      clearTimeout(timer);
+      let roh = ""; try { roh = await r.text(); } catch (e) {}
+      let d = null; try { d = JSON.parse(roh); } catch (e) {}
+      if (r.ok) {
+        const text = antwortText(d);
+        if (text) return text;
+        letzter = "Modell gab eine leere oder unlesbare Antwort.";
+        break;
+      }
+      const msg = String((d && (typeof d.error === "string" ? d.error : (d.error && d.error.message) || d.message)) || roh.slice(0, 120) || "");
+      if (r.status === 401 && rt.art !== "direkt" && /Kein Zugang/i.test(roh)) {
+        letzter = "Kein Zugang zum Server: Die Cloud-Adresse muss auf /k/<dein Zugang> enden (steht am Ende des Installers). Am einfachsten die App ueber genau diesen Link oeffnen.";
+        break;
+      }
+      if (r.status === 401) { letzter = "Schluessel abgelehnt. Pruefe den API-Schluessel im Zahnrad."; break; }
+      if (r.status === 402 || r.status === 403) { letzter = "Kein Guthaben oder kein Zugriff beim Anbieter" + (msg ? ": " + msg.slice(0, 120) : "."); break; }
+      if (r.status === 413) { letzter = "Anfrage zu gross fuer den Server (413). Installer nochmal laufen lassen, der hebt das Limit."; break; }
+      if (r.status === 429) { letzter = "Zu viele Anfragen - kurz warten."; continue; }
+      if (rt.art === "nemesis" && r.status === 503) {
+        letzter = (msg || "Kein Modell erreichbar") + (d && d.versuche && d.versuche.length
+          ? " (" + d.versuche.map((v) => v.anbieter + " " + (v.status || "netz")).join(", ") + ")" : "");
+        break;
+      }
+      if (r.status >= 500) { letzter = "Server oder Modell ueberlastet (" + r.status + ")" + (msg ? ": " + msg.slice(0, 100) : "."); continue; }
+      letzter = "Anfrage abgelehnt (" + r.status + ")" + (msg ? ": " + msg.slice(0, 120) : "");
+      break;
+    }
+    fehler.push((rt.art === "nemesis" && routen.length > 1 ? "Server: " : "") + letzter);
+  }
+  throw new Error(fehler.filter(Boolean).join(" | ") || "Modell nicht erreichbar. Netz pruefen.");
 }
 function toJSON(t) {
   if (!t || !String(t).trim()) throw new Error("Modell gab eine leere Antwort. Bitte nochmal versuchen.");
@@ -641,8 +762,8 @@ function setCloudCfg(c) { localStorage.setItem("nx:cloud", JSON.stringify(c)); }
 
 async function cloudLoad() {
   const c = cloudCfg();
-  if (!c.url) return null;
-  const base = c.url.replace(/\/$/, "");
+  const base = window.nxServer();
+  if (!base) return null;
   const raum = encodeURIComponent(c.raum || "nemesis");
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 6000);
@@ -656,8 +777,8 @@ async function cloudLoad() {
 
 async function cloudSave(state) {
   const c = cloudCfg();
-  if (!c.url) return false;
-  const base = c.url.replace(/\/$/, "");
+  const base = window.nxServer();
+  if (!base) return false;
   const raum = encodeURIComponent(c.raum || "nemesis");
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8000);
@@ -787,7 +908,7 @@ function NemesisLab() {
     let okLokal = false, okCloud = false;
     try { await saveState(zustand); okLokal = true; } catch (e) {}
     okCloud = await cloudSave(zustand);
-    const hatCloud = !!cloudCfg().url;
+    const hatCloud = !!window.nxServer();
     setSync(okCloud ? "cloud" : (okLokal ? (hatCloud ? "lokal" : "ok") : "bad"));
   };
 
@@ -1393,7 +1514,7 @@ function Knowledge({ agent, upd }) {
     if (!ziel) return;
     setUrlBusy(true); setUrlHint("");
     try {
-      const cloud = (JSON.parse(localStorage.getItem("nx:cloud") || "{}").url || "").replace(/\/$/, "");
+      const cloud = window.nxServer();
       if (!cloud) { setUrlHint("Dafür muss der Cloud-Server eingerichtet sein (Zahnrad → Cloud-Speicher). Solange bitte den Text von Hand einfügen."); setUrlBusy(false); return; }
       const r = await fetch(cloud + "/fetch?url=" + encodeURIComponent(ziel));
       if (!r.ok) throw new Error("Seite konnte nicht geladen werden (" + r.status + ")");
@@ -2011,7 +2132,7 @@ const TOOLS = [
 function Workshop(ctx) {
   const { tool, setTool } = ctx;
   if (tool) {
-    const T = { breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: Dossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
+    const T = { breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: KundenDossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
     return (<><button className="back" onClick={() => setTool(null)}>← Werkbank</button><T {...ctx} /></>);
   }
   return (
@@ -3493,7 +3614,7 @@ function Optimizer({ agents, models }) {
 }
 
 /* ---------------- KUNDEN-DOSSIER ---------------- */
-function Dossier({ agents, models }) {
+function KundenDossier({ agents, models }) {
   const [roh, setRoh] = useState("");
   const [busy, setBusy] = useState(false);
   const [out, setOut] = useState(null);
