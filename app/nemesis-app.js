@@ -16,6 +16,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DIR = __dirname;
+const VERSION = "2026-09-28.3";
 const APP_DATEI = path.join(DIR, "nemesis-app.html");
 
 /* ---------- Schluessel: aus Umgebung, sonst aus .env daneben ---------- */
@@ -387,7 +388,7 @@ async function behandle(req, res, url, CORS) {
     json(res, 401, { error: "Kein Zugang" }, CORS);
     return true;
   }
-  const unsere = p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status"
+  const unsere = p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status" || p === "/update"
               || p === "/manifest.webmanifest" || p === "/icon.svg";
   if (!unsere) return false;
 
@@ -412,6 +413,11 @@ async function behandle(req, res, url, CORS) {
   if (p === "/icon.svg") {
     res.writeHead(200, { "Content-Type": "image/svg+xml", "Cache-Control": "max-age=86400" });
     res.end(ICON); return true;
+  }
+
+  if (p === "/update") {
+    if (req.method === "POST") { json(res, 200, await (global.__nxApp.kern.update || update)("hand"), CORS); return true; }
+    json(res, 200, { version: VERSION, letztes: global.__nxApp.letztes || null }, CORS); return true;
   }
 
   if (p === "/llm/status") {
@@ -442,4 +448,97 @@ async function behandle(req, res, url, CORS) {
   return false;
 }
 
-module.exports = { behandle, rotiere, aufgabe, _intern: { ANBIETER, WAHL, HAND, listen, pause } };
+/* ===========================================================
+   SELBST-UPDATE: holt neue Versionen von GitHub, ohne Neustart.
+   Alle 30 Minuten automatisch, oder per Knopf in der App.
+   Pruefen -> tauschen -> bei Fehler sofort zurueck.
+   Abschalten: NEMESIS_AUTO_UPDATE=0 in .env
+   =========================================================== */
+const QUELLE = "https://raw.githubusercontent.com/Skankhunt420hash/Nemesis-Employee-AI/main/app/";
+
+async function holeText(url) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const r = await fetch(url + "?t=" + Date.now(), { signal: ctrl.signal, headers: { "Cache-Control": "no-cache" } });
+    if (!r.ok) throw new Error("GitHub " + r.status);
+    return await r.text();
+  } finally { clearTimeout(t); }
+}
+function lesenOder(f) { try { return fs.readFileSync(f, "utf8"); } catch (e) { return ""; } }
+function tauschen(ziel, inhalt) {
+  if (fs.existsSync(ziel)) fs.copyFileSync(ziel, ziel + ".alt");
+  fs.writeFileSync(ziel + ".tmp", inhalt);
+  fs.renameSync(ziel + ".tmp", ziel);
+}
+
+async function update(grund) {
+  const g = global.__nxApp;
+  if (g.laeuft) return { ok: false, msg: "Update laeuft schon" };
+  if (grund === "auto" && String(process.env.NEMESIS_AUTO_UPDATE || dotenv().NEMESIS_AUTO_UPDATE || "") === "0")
+    return { ok: false, msg: "Auto-Update ist aus" };
+  g.laeuft = true;
+  const erg = { ok: true, zeit: new Date().toISOString(), grund, vorher: VERSION, geaendert: [] };
+  try {
+    // 1) App-Oberflaeche
+    const html = await holeText(QUELLE + "nemesis-app.html");
+    if (!(html.length > 50000 && html.includes("Nemesis Lab") && html.includes("</html>")))
+      throw new Error("App-Datei auf GitHub unvollstaendig, nichts geaendert");
+    if (html !== lesenOder(APP_DATEI)) { tauschen(APP_DATEI, html); erg.geaendert.push("App"); }
+
+    // 2) Server-Modul (Rotator usw.), im laufenden Betrieb getauscht
+    const js = await holeText(QUELLE + "nemesis-app.js");
+    const ziel = path.join(DIR, "nemesis-app.js");
+    if (js !== lesenOder(ziel)) {
+      if (!/module\.exports/.test(js) || !/SELBST-UPDATE/.test(js)) throw new Error("Server-Modul auf GitHub unvollstaendig");
+      const probe = path.join(DIR, "nemesis-app.probe.js");
+      fs.writeFileSync(probe, js);
+      const chk = require("child_process").spawnSync(process.execPath, ["--check", probe], { timeout: 20000 });
+      fs.unlinkSync(probe);
+      if (chk.status !== 0) throw new Error("Server-Modul hat Syntaxfehler, nicht eingespielt");
+      const altKern = g.kern;
+      tauschen(ziel, js);
+      try {
+        delete require.cache[require.resolve(ziel)];
+        require(ziel);                                   // setzt global.__nxApp.kern auf die neue Version
+        const k = g.kern;
+        if (k === altKern || typeof k.behandle !== "function" || typeof k.rotiere !== "function") throw new Error("neue Version meldet sich nicht");
+        erg.geaendert.push("Server");
+        erg.nachher = g.version;
+      } catch (e) {
+        fs.copyFileSync(ziel + ".alt", ziel);            // zurueck
+        delete require.cache[require.resolve(ziel)];
+        g.kern = altKern; g.version = VERSION;
+        throw new Error("Server-Modul startete nicht (" + e.message + "), alte Version bleibt");
+      }
+    }
+    if (!erg.nachher) erg.nachher = g.version;
+    if (erg.geaendert.length) console.log("[update] " + erg.geaendert.join(" + ") + " aktualisiert: " + erg.vorher + " -> " + erg.nachher);
+  } catch (e) {
+    erg.ok = false; erg.msg = e.message;
+    console.warn("[update] " + e.message);
+  } finally { g.laeuft = false; g.letztes = erg; }
+  return erg;
+}
+
+/* ---------- Anmelden: die neueste geladene Version uebernimmt ---------- */
+const KERN = { behandle, rotiere, aufgabe, update, _intern: { ANBIETER, WAHL, HAND, listen, pause } };
+global.__nxApp = global.__nxApp || {};
+global.__nxApp.kern = KERN;
+global.__nxApp.version = VERSION;
+if (!global.__nxApp.uhr) {
+  const lauf = () => { const k = global.__nxApp.kern; if (k && k.update) k.update("auto").catch(() => {}); };
+  global.__nxApp.uhr = setInterval(lauf, 30 * 60 * 1000);
+  global.__nxApp.uhr.unref && global.__nxApp.uhr.unref();
+  const erst = setTimeout(lauf, 90 * 1000); erst.unref && erst.unref();
+}
+
+// Alle, die dieses Modul benutzen, reden immer mit der neuesten Version
+module.exports = {
+  behandle: (...a) => global.__nxApp.kern.behandle(...a),
+  rotiere: (...a) => global.__nxApp.kern.rotiere(...a),
+  aufgabe: (...a) => global.__nxApp.kern.aufgabe(...a),
+  update: (...a) => global.__nxApp.kern.update(...a),
+  get _intern() { return global.__nxApp.kern._intern; },
+  VERSION,
+};

@@ -85,6 +85,7 @@
 
   <div class="row">
     <button class="b g" onclick="NX.test()">Verbindung testen</button>
+    <button class="b g" onclick="NX.update()">Server aktualisieren</button>
   </div>
   <div id="nxTest" style="display:none;font-size:13.5px;line-height:1.7;background:#0E0E18;border:1px solid #26263F;border-radius:10px;padding:12px 14px;margin-top:10px"></div>
   <div class="hint">
@@ -317,6 +318,21 @@ window.NX = {
     }));
     this.close();
     location.reload();
+  },
+  async update(){
+    var out=document.getElementById("nxTest"); out.style.display="block";
+    var base=window.nxServer();
+    if(!base){ out.textContent="❌ App nicht ueber deinen Server-Link geoeffnet."; return; }
+    out.textContent="Hole neueste Version von GitHub … (bis 1 Minute)";
+    try{
+      var r=await fetch(base+"/update",{method:"POST",cache:"no-store"});
+      if(r.status===404||r.status===401){ out.textContent="❌ Dein Server kann sich noch nicht selbst aktualisieren. Einmalig den Installer laufen lassen."; return; }
+      var d=await r.json();
+      if(!d.ok){ out.textContent="❌ "+(d.msg||"Update fehlgeschlagen")+" — die laufende Version bleibt, nichts kaputt."; return; }
+      if(!d.geaendert.length){ out.textContent="✅ Schon aktuell (Version "+d.nachher+")."; return; }
+      out.textContent="✅ Aktualisiert: "+d.geaendert.join(" + ")+" (Version "+d.nachher+")."+(d.geaendert.indexOf("App")>-1?" Lade neu …":"");
+      if(d.geaendert.indexOf("App")>-1) setTimeout(function(){ location.reload(); },1500);
+    }catch(e){ out.textContent="❌ "+window.netzText(base); }
   },
   async test(){
     var out=document.getElementById("nxTest"); out.style.display="block"; out.innerHTML="Pruefe …";
