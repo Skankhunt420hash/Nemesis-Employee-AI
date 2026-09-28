@@ -650,9 +650,9 @@ async function ask(messages, system, maxTokens = 1200) {
   for (const rt of routen) {
     let letzter = "";
     for (let versuch = 0; versuch < 3; versuch++) {
-      if (versuch > 0) await new Promise((r) => setTimeout(r, versuch * 1500));
+      if (versuch > 0 && rt.art !== "nemesis") await new Promise((r) => setTimeout(r, versuch * 1500));
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), rt.art === "nemesis" ? 120000 : 90000);
+      const timer = setTimeout(() => ctrl.abort(), rt.art === "nemesis" ? 200000 : 90000);
       let r;
       try {
         r = await fetch(rt.url, { method: "POST", headers: rt.headers, body: rt.body, signal: ctrl.signal });
@@ -681,6 +681,11 @@ async function ask(messages, system, maxTokens = 1200) {
       if (r.status === 402 || r.status === 403) { letzter = "Kein Guthaben oder kein Zugriff beim Anbieter" + (msg ? ": " + msg.slice(0, 120) : "."); break; }
       if (r.status === 413) { letzter = "Anfrage zu gross fuer den Server (413). Installer nochmal laufen lassen, der hebt das Limit."; break; }
       if (r.status === 429) { letzter = "Zu viele Anfragen - kurz warten."; continue; }
+      if (rt.art === "nemesis" && r.status === 503 && versuch === 0) {
+        letzter = msg || "Kein Modell erreichbar";
+        await new Promise((ok) => setTimeout(ok, 4000));
+        continue;                                  // einmal nachfassen, Engpaesse sind meist nach Sekunden weg
+      }
       if (rt.art === "nemesis" && r.status === 503) {
         letzter = (msg || "Kein Modell erreichbar") + (d && d.versuche && d.versuche.length
           ? " (" + d.versuche.map((v) => v.anbieter + " " + (v.status || "netz")).join(", ") + ")" : "");
@@ -4678,9 +4683,20 @@ Antworte NUR mit JSON. {"ok": boolean, "hinweis": string (1 Satz, leer wenn alle
           save(mm); break;
         }
         if (mm.steps[i].status === "fertig") continue;
-        await runOne(mm, i);
+        for (let v = 1; ; v++) {
+          try { await runOne(mm, i); break; }
+          catch (e) {
+            if (v >= 3 || stop.current || /Schluessel|Kein Zugang|Guthaben|Kein Modell eingerichtet/i.test(e.message)) throw e;
+            mm.log = [...mm.log, { t: "warn", x: "Schritt " + (i + 1) + " hakt (" + e.message.slice(0, 80) + "), neuer Versuch " + (v + 1) + "/3 in " + (v * 10) + " s." }];
+            save(mm);
+            await new Promise((ok) => setTimeout(ok, v * 10000));
+          }
+        }
       }
-      if (!stop.current && mm.steps.every((x) => x.status === "fertig") && !mm.ergebnis) await finish(mm);
+      if (!stop.current && mm.steps.every((x) => x.status === "fertig") && !mm.ergebnis) {
+        try { await finish(mm); }
+        catch (e) { await new Promise((ok) => setTimeout(ok, 10000)); await finish(mm); }
+      }
     } catch (e) {
       mm.status = "fehler";
       mm.log = [...mm.log, { t: "err", x: "Abbruch: " + e.message }];

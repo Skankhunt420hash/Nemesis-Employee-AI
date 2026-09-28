@@ -122,6 +122,10 @@ const WAHL = {
   ],
 };
 
+// Ganz am Ende jeder Kette: OpenAI-Modell ohne Denk-Modus (liefert immer Text)
+const RETTUNG = [["openai", [/^gpt-4\.1-mini$/i, /^gpt-4o-mini$/i, /^gpt-4\.1$/i, /^gpt-4o$/i, /^gpt-5(\.\d)?-chat/i]]];
+for (const k of Object.keys(WAHL)) WAHL[k] = WAHL[k].concat(RETTUNG);
+
 // Manuell: "!model <key>" in der Nachricht oder Modell-Wahl im Zahnrad
 const HAND = {
   gemini:     [["gemini", [/flash-lite/i, /flash/i]]],
@@ -176,14 +180,14 @@ async function modellListe(name) {
   return ids;
 }
 
-function bereit(name) {
-  return !!schluessel(ANBIETER[name].keys) && !(pause[name] > Date.now());
+function bereit(name, trotzPause) {
+  return !!schluessel(ANBIETER[name].keys) && (trotzPause || !(pause[name] > Date.now()));
 }
 
-async function kandidaten(plan) {
+async function kandidaten(plan, trotzPause) {
   const out = [], gesehen = new Set();
   for (const [name, muster] of plan) {
-    if (!ANBIETER[name] || !bereit(name)) continue;
+    if (!ANBIETER[name] || !bereit(name, trotzPause)) continue;
     const ids = await modellListe(name);
     for (const re of muster) {
       const id = ids.find((x) => re.test(x));
@@ -213,22 +217,27 @@ function textAus(d) {
   return "";
 }
 
-async function frage(k, system, messages, maxTokens, restMs) {
+const DENKER = (k) => k.name === "openai" && /^(gpt-5|o\d)/i.test(k.id) && !/chat/i.test(k.id);
+
+async function frage(k, system, messages, maxTokens, restMs, mehrLuft) {
   const a = ANBIETER[k.name];
   const body = {
     model: k.id,
     messages: (system ? [{ role: "system", content: system }] : []).concat(messages),
   };
-  if (k.name === "openai" && /^(gpt-5|o\d)/i.test(k.id)) {
-    body.max_completion_tokens = Math.max(maxTokens, 2500);   // Denk-Modelle brauchen Luft
+  if (DENKER(k)) {
+    // Denk-Modelle verbrauchen Token fuers Nachdenken, bevor Text kommt -> grosszuegig
+    body.max_completion_tokens = Math.min(maxTokens + (mehrLuft ? 16000 : 6000), 32000);
     body.reasoning_effort = "low";
+  } else if (k.name === "openai") {
+    body.max_completion_tokens = maxTokens;
   } else {
     body.max_tokens = maxTokens;
   }
   const headers = { "Content-Type": "application/json", Authorization: "Bearer " + schluessel(a.keys) };
   if (k.name === "openrouter") { headers["HTTP-Referer"] = "https://nemesis-studio-ai.ch"; headers["X-Title"] = "Nemesis Lab"; }
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), Math.min(55000, Math.max(8000, restMs)));
+  const t = setTimeout(() => ctrl.abort(), Math.min(90000, Math.max(8000, restMs)));
   try {
     const r = await fetch(a.url, { method: "POST", headers, body: JSON.stringify(body), signal: ctrl.signal });
     const roh = await r.text();
@@ -239,7 +248,13 @@ async function frage(k, system, messages, maxTokens, restMs) {
                warte: Number(r.headers.get("retry-after")) || 0 };
     }
     const text = textAus(d);
-    if (!text) return { ok: false, status: 200, msg: "leere Antwort" };
+    if (!text) {
+      const ch = (d && d.choices && d.choices[0]) || {};
+      const grund = ch.finish_reason || (d && d.finish_reason) || "";
+      const verw = ch.message && ch.message.refusal;
+      return { ok: false, status: 200, leer: true, laenge: grund === "length" || grund === "max_tokens",
+               msg: verw ? "verweigert: " + String(verw).slice(0, 120) : "leere Antwort" + (grund ? " (" + grund + ")" : "") };
+    }
     return { ok: true, text };
   } catch (e) {
     return { ok: false, status: 0, msg: e.name === "AbortError" ? "Zeitueberschreitung" : e.message };
@@ -277,7 +292,8 @@ async function rotiere(einsatz) {
     plan = WAHL[art];
   }
 
-  const liste = await kandidaten(plan);
+  let liste = await kandidaten(plan);
+  if (!liste.length) liste = await kandidaten(plan, true);   // lieber versuchen als sofort aufgeben
   if (!liste.length) {
     const hat = Object.keys(ANBIETER).filter((n) => schluessel(ANBIETER[n].keys));
     return { status: 503, body: { error: hat.length
@@ -285,12 +301,24 @@ async function rotiere(einsatz) {
       : "Auf dem Server ist kein einziger KI-Schluessel hinterlegt (.env: GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY ...)." } };
   }
 
-  const start = Date.now(), budget = 100000, versuche = [];
+  const start = Date.now(), budget = 160000, versuche = [];
   zaehler.anfragen++;
   for (const k of liste) {
-    const rest = budget - (Date.now() - start);
+    let rest = budget - (Date.now() - start);
     if (rest < 6000) break;
-    const r = await frage(k, system, messages, maxTokens, rest);
+    let r = await frage(k, system, messages, maxTokens, rest);
+    // Zu viele Anfragen: kurz warten und nochmal, statt aufzugeben
+    if (!r.ok && r.status === 429 && (budget - (Date.now() - start)) > 30000) {
+      await new Promise((ok) => setTimeout(ok, Math.min(Math.max(r.warte || 3, 2), 15) * 1000));
+      rest = budget - (Date.now() - start);
+      r = await frage(k, system, messages, maxTokens, rest);
+    }
+    // Denk-Modell hat alles fuers Nachdenken verbraucht: einmal mit viel mehr Luft
+    if (!r.ok && r.leer && DENKER(k) && (budget - (Date.now() - start)) > 30000) {
+      versuche.push({ anbieter: k.name, modell: k.id, status: r.status, fehler: r.msg + " -> nochmal mit mehr Budget" });
+      rest = budget - (Date.now() - start);
+      r = await frage(k, system, messages, maxTokens, rest, true);
+    }
     if (r.ok) {
       const frei = ANBIETER[k.name].frei;
       zaehler[frei ? "frei" : "bezahlt"]++;
