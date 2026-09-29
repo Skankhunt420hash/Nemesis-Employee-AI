@@ -120,7 +120,8 @@ node --check "$DATEI" 2>/dev/null || { nein "Syntaxfehler nach Einbau"; zurueck;
 ERG2=$(node "$TMP/patch-serve.js" "$ORDNER/nemesis-serve.js" 2>/dev/null)
 case "$ERG2" in
   SCHON) ok "Kunden-Chat hat schon ein Ausweichmodell" ;;
-  OK)    if node --check "$ORDNER/nemesis-serve.js.neu" 2>/dev/null; then mv "$ORDNER/nemesis-serve.js.neu" "$ORDNER/nemesis-serve.js"; ok "Kunden-Chat: faellt Claude aus, antwortet automatisch das Ausweichmodell"
+  OK)    cp "$ORDNER/nemesis-serve.js.neu" "$TMP/serve-probe.js"
+         if node --check "$TMP/serve-probe.js" 2>/dev/null; then mv "$ORDNER/nemesis-serve.js.neu" "$ORDNER/nemesis-serve.js"; ok "Kunden-Chat: faellt Claude aus, antwortet automatisch das Ausweichmodell"
          else rm -f "$ORDNER/nemesis-serve.js.neu"; info "Ausweichmodell nicht eingebaut (Syntax), Kunden-Chat bleibt wie er war"; fi ;;
   *)     info "Kunden-Datei sieht anders aus, Ausweichmodell nicht eingebaut (Kunden-Chat bleibt wie er war)" ;;
 esac

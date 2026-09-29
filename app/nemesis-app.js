@@ -16,7 +16,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DIR = __dirname;
-const VERSION = "2026-09-28.3";
+const VERSION = "2026-09-29.1";
 const APP_DATEI = path.join(DIR, "nemesis-app.html");
 
 /* ---------- Schluessel: aus Umgebung, sonst aus .env daneben ---------- */
@@ -417,7 +417,7 @@ async function behandle(req, res, url, CORS) {
 
   if (p === "/update") {
     if (req.method === "POST") { json(res, 200, await (global.__nxApp.kern.update || update)("hand"), CORS); return true; }
-    json(res, 200, { version: VERSION, letztes: global.__nxApp.letztes || null }, CORS); return true;
+    json(res, 200, { version: VERSION, letztes: global.__nxApp.letztes || null, kundenChat: global.__nxApp.wartungErgebnis || null }, CORS); return true;
   }
 
   if (p === "/llm/status") {
@@ -521,11 +521,93 @@ async function update(grund) {
   return erg;
 }
 
+/* ===========================================================
+   WARTUNG: Kunden-Chat bekommt ein Ausweichmodell (falls Claude
+   ausfaellt). Wird einmal selbst eingebaut, geprueft, dann ein
+   kurzer Neustart des Dienstes. Kein Konsolen-Befehl noetig.
+   =========================================================== */
+function kundenChatAbsichern() {
+  const ziel = path.join(DIR, "nemesis-serve.js");
+  let s = lesenOder(ziel);
+  if (!s) return "fehlt";
+  if (s.includes("frageClaudeDirekt")) return "schon";
+  const alt = "async function frageClaude(agent, messages) {";
+  if (s.split(alt).length !== 2 || !s.includes("module.exports")) return "anders";
+  s = s.replace(alt, "async function frageClaudeDirekt(agent, messages) {");
+  const HUELLE = `
+/* ===========================================================
+   Ausweichmodell (vom Nemesis-App-Modul eingebaut): Faellt Claude
+   aus, antwortet automatisch der Rotator. Der Kunde merkt nichts.
+   NEMESIS_KUNDEN_KI=rotator in .env -> Claude gar nicht fragen.
+   =========================================================== */
+let claudePause = 0;
+async function frageClaude(agent, messages) {
+  const modus = String(process.env.NEMESIS_KUNDEN_KI || "").toLowerCase();
+  if (process.env.ANTHROPIC_API_KEY && modus !== "rotator" && Date.now() > claudePause) {
+    try { return await frageClaudeDirekt(agent, messages); }
+    catch (e) {
+      const m = String(e.message || "");
+      if (/credit|balance|authentication|api[-_ ]?key|permission|401|403/i.test(m)) claudePause = Date.now() + 10 * 60 * 1000;
+      console.warn("[serve] Claude aus (" + m.slice(0, 120) + "), Ausweichmodell uebernimmt");
+    }
+  }
+  const APP = require("./nemesis-app.js");
+  const r = await APP.rotiere({
+    system: agent.systemPrompt || "Du bist ein hilfreicher Assistent.",
+    messages, max_tokens: Math.min(agent.maxTokens || 600, 1000),
+  });
+  if (r.status !== 200) throw new Error((r.body && r.body.error) || "kein Modell erreichbar");
+  return { text: r.body.text, usage: {}, modell: r.body.anbieter + ":" + r.body.modell };
+}
+`;
+  const i = s.lastIndexOf("module.exports");
+  s = s.slice(0, i) + HUELLE + "\n" + s.slice(i);
+
+  // Pruefen: Syntax + laedt sauber, in einem eigenen Prozess
+  const cp = require("child_process");
+  const probe = path.join(DIR, "nemesis-serve.probe.js");
+  fs.writeFileSync(probe, s);
+  let gut = false;
+  try {
+    const c1 = cp.spawnSync(process.execPath, ["--check", probe], { timeout: 20000 });
+    const c2 = c1.status === 0 && cp.spawnSync(process.execPath,
+      ["-e", "require(" + JSON.stringify(probe) + ");setTimeout(()=>process.exit(0),300)"],
+      { cwd: DIR, timeout: 20000, env: process.env });
+    gut = !!(c2 && c2.status === 0);
+  } catch (e) {}
+  try { fs.unlinkSync(probe); } catch (e) {}
+  if (!gut) return "probe-fehler";
+
+  fs.copyFileSync(ziel, ziel + ".alt");
+  fs.writeFileSync(ziel + ".tmp", s);
+  fs.renameSync(ziel + ".tmp", ziel);
+
+  // Dienst kurz neu starten, damit die Absicherung aktiv wird (nur unter systemd)
+  const dienst = (lesenOder("/proc/self/cgroup").match(/([\w@.-]+\.service)/) || [])[1];
+  if (dienst && !/^(user@|session-)/.test(dienst)) {
+    console.log("[wartung] Kunden-Chat abgesichert, starte " + dienst + " in 5 s neu");
+    const t = setTimeout(() => {
+      try { cp.spawn("systemctl", ["restart", dienst], { detached: true, stdio: "ignore" }).unref(); } catch (e) {}
+    }, 5000);
+    t.unref && t.unref();
+    return "ok-neustart";
+  }
+  return "ok-beim-naechsten-start";
+}
+
 /* ---------- Anmelden: die neueste geladene Version uebernimmt ---------- */
 const KERN = { behandle, rotiere, aufgabe, update, _intern: { ANBIETER, WAHL, HAND, listen, pause } };
 global.__nxApp = global.__nxApp || {};
 global.__nxApp.kern = KERN;
 global.__nxApp.version = VERSION;
+if (!global.__nxApp.wartung) {
+  global.__nxApp.wartung = true;
+  const w = setTimeout(() => {
+    try { const e = kundenChatAbsichern(); global.__nxApp.wartungErgebnis = e; if (e !== "schon") console.log("[wartung] Kunden-Chat: " + e); }
+    catch (e) { console.warn("[wartung] " + e.message); }
+  }, 8000);
+  w.unref && w.unref();
+}
 if (!global.__nxApp.uhr) {
   const lauf = () => { const k = global.__nxApp.kern; if (k && k.update) k.update("auto").catch(() => {}); };
   global.__nxApp.uhr = setInterval(lauf, 30 * 60 * 1000);
