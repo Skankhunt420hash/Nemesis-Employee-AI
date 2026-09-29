@@ -549,6 +549,11 @@ const CSS = `
 .stat b{font-family:'Archivo Black',sans-serif;font-size:26px;display:block;line-height:1}
 .stat span{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:1.1px;display:block;margin-top:6px}
 .code{font-family:'JetBrains Mono',monospace;font-size:13px;min-height:200px;line-height:1.6}
+.wgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0 18px}
+.wtile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:78px;padding:8px 4px;background:var(--panel);border:1px solid var(--line);border-bottom-width:3px;color:var(--txt);font-family:inherit;cursor:pointer;position:relative}
+.wtile .wem{font-size:26px;line-height:1.1}
+.wtile .wnm{font-size:10.5px;line-height:1.2;color:var(--mut);text-align:center;word-break:break-word;max-height:2.5em;overflow:hidden}
+.wtile .wsub{position:absolute;top:2px;right:4px;font-size:13px}
 .gauge{display:flex;align-items:center;gap:18px;padding:20px;border:1px solid var(--line);background:var(--panel);margin-bottom:16px}
 .gauge b{font-family:'Archivo Black',sans-serif;font-size:40px;line-height:1}
 .gauge span{font-size:15px;color:var(--mut);line-height:1.6}
@@ -1835,201 +1840,298 @@ function PlayHub(ctx) {
 
 const AVATAR_FARBEN = ["#FF2D78", "#22E0FF", "#9BFF3D", "#FFD23F", "#B57BFF", "#FF8A3D"];
 
-function Welt({ agents, models, welt, commit }) {
-  const [busy, setBusy] = useState(false);
+/* ---------- DIE WELT: laeuft auf dem Server, die App ist nur das Fenster ---------- */
+const W_EMO = { kirche: "⛪", laden: "🏪", werkstatt: "🔧", schule: "🏫", park: "🌳", buero: "🏢", labor: "🔬", cafe: "☕", bibliothek: "📚", halle: "🏛️", bank: "🏦", markt: "🧺", firma: "🏭" };
+const W_HAUSEMO = ["⛺", "🛖", "🏠", "🏡", "🏘️", "🏰"];
+const W_STUNDEN = [["1", "1 Std"], ["4", "4 Std"], ["12", "12 Std"], ["24", "1× täglich"]];
+
+function wApi(pfad, opt) {
+  const base = window.nxServer();
+  if (!base) return Promise.reject(new Error("KEIN_SERVER"));
+  const raum = encodeURIComponent((cloudCfg().raum) || "nemesis");
+  const url = base + pfad + (pfad.indexOf("?") >= 0 ? "&" : "?") + "raum=" + raum;
+  return fetch(url, Object.assign({ cache: "no-store" }, opt || {})).then(async (r) => {
+    let d = null; try { d = await r.json(); } catch (e) {}
+    if (!d && (r.status === 404 || r.status === 401)) throw new Error("ALT");
+    if (!r.ok) throw new Error((d && d.error) || ("Fehler " + r.status));
+    return d;
+  });
+}
+const wPost = (pfad, body) => wApi(pfad, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+const wProfil = (a) => ({
+  id: a.id, name: a.name, branche: a.branche || "", funktion: a.funktion || "", xp: a.xp || 0,
+  mission: typeof a.mission === "string" ? a.mission : "", skills: a.skills || [], notes: (a.persona && a.persona.notes) || "",
+});
+
+function Welt({ agents, welt }) {
+  const [d, setD] = useState(null);
   const [err, setErr] = useState("");
-  const [blick, setBlick] = useState(null);      // Agent-Detail
-  const [letzterTag, setLetzterTag] = useState(null);
+  const [sel, setSel] = useState(null);
+  const [blick, setBlick] = useState(null);
+  const [fd, setFd] = useState(null);
+  const [vorschau, setVorschau] = useState(false);
+  const [wunsch, setWunsch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [off, setOff] = useState(0);
+  const [, tick] = useState(0);
+  const migriert = useRef(false);
 
-  const bewohner = agents.filter((a) => a.welt);
-  const neulinge = agents.filter((a) => !a.welt);
-  const chronik = welt?.chronik || [];
-  const tag = welt?.tag || 0;
-
-  /* --- Welt erschaffen / Neulinge einbürgern --- */
-  const erschaffen = async () => {
-    const wer = neulinge.slice(0, 8);
-    if (!wer.length) { setErr("Alle Agenten leben bereits in der Welt."); return; }
-    setBusy(true); setErr("");
+  const laden = async () => {
     try {
-      const liste = wer.map((a) => `${a.name} (${a.branche || "—"} / ${a.funktion || "—"}, Level ${levelOf(a.xp)})`).join("\n");
-      const r = toJSON(await ask([{ role: "user", content: "Diese Agenten betreten die Welt:\n" + liste }],
-        `Du erschaffst für jeden Agenten eine Verkörperung in einer lebendigen Zivilisation. Jeder bekommt ein Aussehen, ein einfaches erstes Zuhause und einen Charakterzug, der ihn in der Gemeinschaft ausmacht. Antworte NUR mit JSON.
-{"bewohner": [{"name": string (exakt wie oben), "emoji": string (EIN passendes Emoji als Gesicht), "aussehen": string (1 Satz), "haus": string (Name der ersten Behausung, z.B. "Bretterbude am Hang"), "eigenart": string (kurz, was ihn sozial ausmacht)}]}`, 1800));
-
-      const map = {};
-      (r.bewohner || []).forEach((b) => { map[b.name] = b; });
-      const next = agents.map((a) => {
-        const b = map[a.name];
-        if (!b || a.welt) return a;
-        return { ...a, welt: {
-          emoji: b.emoji || "◍", aussehen: b.aussehen || "", eigenart: b.eigenart || "",
-          farbe: AVATAR_FARBEN[Math.floor(Math.random() * AVATAR_FARBEN.length)],
-          haus: b.haus || "Zelt", hausStufe: 1, geld: 100, firma: null, stimmung: "neugierig",
-        } };
-      });
-      const neueChronik = [{ tag: tag || 1, art: "done", text: wer.map((a) => a.name).join(", ") + " " + (wer.length === 1 ? "betritt" : "betreten") + " die Welt." }, ...chronik].slice(0, 60);
-      await commit(next, "Welt: " + wer.length + " Bewohner erschaffen", null, null, { tag: Math.max(tag, 1), chronik: neueChronik });
-    } catch (e) { setErr(e.message); }
-    setBusy(false);
-  };
-
-  /* --- Ein Tag vergeht --- */
-  const tagVergehen = async () => {
-    if (bewohner.length < 1) { setErr("Erst Bewohner erschaffen."); return; }
-    setBusy(true); setErr(""); setLetzterTag(null);
-    try {
-      const stand = bewohner.map((a) => {
-        const w = a.welt;
-        return `${a.name} ${w.emoji} — wohnt in: ${w.haus} (Stufe ${w.hausStufe}), Geld: ${w.geld}, ` +
-          `Unternehmen: ${w.firma ? w.firma.name + " (" + w.firma.idee + ", Stufe " + w.firma.stufe + ")" : "keines"}, ` +
-          `Stimmung: ${w.stimmung}, Eigenart: ${w.eigenart}`;
-      }).join("\n");
-      const bisher = chronik.slice(0, 5).map((c) => "Tag " + c.tag + ": " + c.text).join("\n") || "Die Welt ist jung.";
-
-      const r = toJSON(await ask([{ role: "user", content:
-        `TAG ${tag + 1} in der Welt.\n\nBEWOHNER:\n${stand}\n\nWAS BISHER GESCHAH:\n${bisher}` }],
-        `Du erzählst einen Tag in einer kleinen Zivilisation aus KI-Wesen. Sie leben, reden, spielen, bauen an ihren Häusern und gründen Unternehmen, die zu ihrem Imperium werden sollen. Lass echte Dinge passieren: jemand verdient Geld, jemand baut aus, jemand hat eine Geschäftsidee, jemand streitet oder verbündet sich. Sei lebendig und konkret, kein Kitsch. Deutsch.
-
-Regeln: Geld-Änderungen realistisch zwischen -60 und +180. Ein Haus wird nur ausgebaut, wenn der Bewohner genug Geld hat (ab 150). Ein Unternehmen gründet nur, wer noch keines hat und mindestens 120 Geld besitzt.
-
-Antworte NUR mit JSON.
-{"erzaehlung": string (3-4 Sätze: der Tag als Ganzes),
- "ereignisse": [{"wer": string (exakter Name), "tat": string (1 Satz, was er tat), "geld": number (Änderung, kann negativ sein), "hausNeu": string (neuer Hausname wenn ausgebaut, sonst ""), "firmaNeu": {"name": string, "idee": string} (nur wenn heute gegründet, sonst null), "firmaWachstum": boolean (true wenn bestehendes Unternehmen eine Stufe steigt), "stimmung": string (ein Wort)}],
- "gespraech": {"a": string, "b": string, "zeilen": [string] (3-4 Wortwechsel, jeweils "Name: Text")},
- "spiel": string (welches Spiel gespielt wurde und wer gewann, 1 Satz)}`, 2600));
-
-      const evMap = {};
-      (r.ereignisse || []).forEach((e) => { evMap[e.wer] = e; });
-
-      const next = agents.map((a) => {
-        const e = evMap[a.name];
-        if (!a.welt || !e) return a;
-        const w = { ...a.welt };
-        w.geld = Math.max(0, Math.round(w.geld + (Number(e.geld) || 0)));
-        if (e.stimmung) w.stimmung = e.stimmung;
-        if (e.hausNeu && e.hausNeu.trim()) { w.haus = e.hausNeu.trim(); w.hausStufe = (w.hausStufe || 1) + 1; }
-        if (e.firmaNeu && e.firmaNeu.name && !w.firma) {
-          w.firma = { name: e.firmaNeu.name, idee: e.firmaNeu.idee || "", stufe: 1, gegruendetTag: tag + 1 };
-        } else if (e.firmaWachstum && w.firma) {
-          w.firma = { ...w.firma, stufe: (w.firma.stufe || 1) + 1 };
+      const x = await wApi("/welt");
+      setOff(x.serverZeit - Date.now()); setD(x); setErr("");
+      if (x.neu && !migriert.current) {
+        migriert.current = true;
+        const alte = agents.filter((a) => a.welt);
+        if (alte.length || (welt && (welt.tag > 0 || (welt.chronik || []).length))) {
+          const bew = {}; alte.forEach((a) => { bew[a.id] = a.welt; });
+          const y = await wPost("/welt/zulassen", { agenten: agents.map(wProfil), an: alte.map((a) => a.id),
+            alt: { tag: (welt && welt.tag) || 0, chronik: (welt && welt.chronik) || [], bewohner: bew } });
+          setD(y);
         }
-        return { ...a, welt: w, xp: a.xp + 6 };
-      });
-
-      const eintraege = [{ tag: tag + 1, art: "", text: r.erzaehlung }];
-      if (r.spiel) eintraege.push({ tag: tag + 1, art: "warn", text: "Spiel: " + r.spiel });
-      const neueChronik = [...eintraege.reverse(), ...chronik].slice(0, 60);
-
-      await commit(next, `Welt: Tag ${tag + 1} vergangen`, null, null, { tag: tag + 1, chronik: neueChronik });
-      setLetzterTag(r);
+      }
     } catch (e) { setErr(e.message); }
-    setBusy(false);
   };
+  useEffect(() => { laden(); }, []);
+  const laeuft = !!(d && d.laeuft);
+  useEffect(() => {
+    const t = setInterval(() => { if (!document.hidden) laden(); }, laeuft ? 3000 : 15000);
+    return () => clearInterval(t);
+  }, [laeuft]);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 30000); return () => clearInterval(t); }, []);
 
-  /* --- Detailblick auf einen Bewohner --- */
-  const blickAgent = blick ? (agents.find((x) => x.id === blick) || null) : null;
-  if (blickAgent && blickAgent.welt) {
-    const a = blickAgent;
-    const w = a.welt;
+  const blickFirma = blick && blick.typ === "firma" ? blick.id : null;
+  const blickVersion = blickFirma && d && d.firmen[blickFirma] ? d.firmen[blickFirma].version : 0;
+  useEffect(() => {
+    if (!blickFirma) return;
+    let weg = false;
+    wApi("/welt/firma?id=" + encodeURIComponent(blickFirma)).then((x) => { if (!weg) setFd({ id: blickFirma, v: blickVersion, html: x.html || "" }); }).catch(() => {});
+    return () => { weg = true; };
+  }, [blickFirma, blickVersion]);
+
+  const jetzt = Date.now() + off;
+  const rel = (ms) => {
+    const m = Math.round((ms - jetzt) / 60000);
+    if (m <= 1) return "gleich";
+    return "in " + (m >= 60 ? Math.floor(m / 60) + " Std " + (m % 60 ? (m % 60) + " Min" : "") : m + " Min");
+  };
+  const tu = async (fn) => { setBusy(true); setErr(""); try { const y = await fn(); if (y) setD(y); } catch (e) { setErr(e.message); } setBusy(false); };
+
+  if (err === "KEIN_SERVER") return <div className="log err">Die Welt läuft auf deinem Server. Öffne die App über deinen Server-Link (…/k/&lt;Zugang&gt;/app).</div>;
+  if (err === "ALT") return (
+    <>
+      <div className="log warn">Dein Server kennt die Welt noch nicht. Zahnrad → «Server aktualisieren» drücken (kann bis zu 5 Minuten dauern, bis die neue Version bereit ist) und dann hierher zurückkommen.</div>
+      <button className="btn ghost" onClick={laden}>Nochmal versuchen</button>
+    </>
+  );
+  if (!d) return <div className="log">{err ? "Fehler: " + err : "Lade die Welt …"}</div>;
+
+  const bew = d.bewohner, prof = d.profile, zug = d.zugelassen;
+  const aktive = Object.keys(bew).filter((id) => zug[id] && prof[id]);
+  const firmen = Object.values(d.firmen);
+  const ap = d.autopilot;
+  const gewaehlt = sel || new Set(Object.keys(zug).filter((k) => zug[k]));
+  const geaendert = sel && (sel.size !== Object.keys(zug).filter((k) => zug[k]).length || [...sel].some((k) => !zug[k]));
+
+  /* ---------- Firma (Ablage) ---------- */
+  if (blick && blick.typ === "firma" && d.firmen[blick.id]) {
+    const f = d.firmen[blick.id];
+    const base = window.nxServer(), raum = encodeURIComponent((cloudCfg().raum) || "nemesis");
+    const vorschauUrl = base + "/welt/firma/app?raum=" + raum + "&id=" + encodeURIComponent(f.id) + "&v=" + f.version;
+    const bauen = (mitWunsch) => tu(async () => {
+      const y = await wPost("/welt/firma/bauen", { id: f.id, wunsch: mitWunsch ? wunsch : undefined, jetzt: true });
+      if (mitWunsch) setWunsch("");
+      return y;
+    });
+    return (
+      <>
+        <button className="back" onClick={() => { setBlick(null); setFd(null); setVorschau(false); }}>← Die Welt</button>
+        <div className="card" style={{ borderColor: "var(--tox)" }}>
+          <div className="nm" style={{ fontSize: 20, color: "var(--tox)" }}>🏭 {f.name}</div>
+          <div className="mt">Gegründet von {f.gruenderName} · Tag {f.tagGegruendet} · Stufe {f.stufe} · Software v{f.version}</div>
+          <div className="dsc" style={{ marginTop: 10 }}>{f.idee}</div>
+        </div>
+        {f.verwaist && <div className="log warn">{f.gruenderName} lebt gerade nicht in der Welt. Die Firma ruht, du kannst die Software trotzdem kopieren. Lass {f.gruenderName} wieder hinein, dann wird weitergebaut.</div>}
+        {laeuft && <div className="log">⏳ {d.laeuft.was} …</div>}
+        {err && <div className="log err">{err}</div>}
+
+        <span className="lbl">Software</span>
+        {f.bytes ? (
+          <>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+              <button className="btn tox sm" onClick={() => setVorschau(!vorschau)}>{vorschau ? "Vorschau schließen" : "Ausprobieren"}</button>
+              <a className="btn ghost sm" href={vorschauUrl} target="_blank" rel="noopener">Im eigenen Tab</a>
+            </div>
+            {vorschau && <iframe title="Vorschau" src={vorschauUrl} sandbox="allow-scripts allow-modals allow-downloads" style={{ width: "100%", height: 480, border: "1px solid var(--line)", background: "#fff", borderRadius: 4, marginBottom: 12 }} />}
+            <span className="lbl">Für dich kopieren — fertige App, eine Datei</span>
+            {fd && fd.id === f.id ? <Deliverable text={fd.html} filename={f.id + ".html"} /> : <div className="log">Lade den Code …</div>}
+            <div className="log" style={{ marginTop: 8 }}>Datei als «.html» speichern und am Handy oder PC öffnen. Sie gehört dir, ohne Abo, ohne Server.</div>
+          </>
+        ) : <div className="log">Die erste Version wird gebaut. Das passiert beim nächsten Weltentag oder gleich mit dem Knopf unten.</div>}
+
+        <span className="lbl" style={{ marginTop: 16 }}>Weiterbauen lassen</span>
+        <input value={wunsch} placeholder="Wunsch ans Team, z.B. «Dunkles Design» oder «PDF-Export»" onChange={(e) => setWunsch(e.target.value)} />
+        <div style={{ height: 10 }} />
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button className="btn am" disabled={busy || laeuft || f.verwaist || !wunsch.trim()} onClick={() => bauen(true)}>Wunsch bauen lassen</button>
+          <button className="btn ghost" disabled={busy || laeuft || f.verwaist} onClick={() => bauen(false)}>{f.bytes ? "Jetzt weiterbauen" : "Erste Version bauen"}</button>
+        </div>
+        {f.wunsch && <div className="log warn" style={{ marginTop: 10 }}>Offener Wunsch: {f.wunsch}</div>}
+
+        {f.changelog && f.changelog.length > 0 && (
+          <>
+            <span className="lbl" style={{ marginTop: 16 }}>Entwicklung</span>
+            {f.changelog.map((c, i) => (
+              <div key={i} className="log" style={{ marginTop: 6 }}><b>v{c.v} · Tag {c.tag}{c.wunsch ? " · dein Wunsch" : ""}</b>{"\n"}{c.text}</div>
+            ))}
+          </>
+        )}
+      </>
+    );
+  }
+
+  /* ---------- Bewohner ---------- */
+  if (blick && blick.typ === "bewohner" && bew[blick.id] && prof[blick.id]) {
+    const w = bew[blick.id], a = prof[blick.id];
+    const f = w.firmaId && d.firmen[w.firmaId];
+    const eigene = d.gebaeude.filter((g) => g.besitzer === blick.id && g.art !== "firma");
     return (
       <>
         <button className="back" onClick={() => setBlick(null)}>← Die Welt</button>
         <div className="card" style={{ borderColor: w.farbe }}>
           <div className="row">
             <div style={{ fontSize: 40, flex: "0 0 52px", textAlign: "center" }}>{w.emoji}</div>
-            <div>
-              <div className="nm" style={{ fontSize: 19, color: w.farbe }}>{a.name}</div>
-              <div className="mt">Level {levelOf(a.xp)} · {w.stimmung}</div>
-            </div>
+            <div><div className="nm" style={{ fontSize: 19, color: w.farbe }}>{a.name}</div><div className="mt">{a.funktion || a.branche || "Bewohner"} · {w.stimmung}{zug[blick.id] ? "" : " · nicht in der Welt"}</div></div>
           </div>
           <div className="dsc" style={{ marginTop: 10 }}>{w.aussehen}</div>
         </div>
         <span className="lbl">Zuhause</span>
-        <div className="log">{w.haus} · Ausbaustufe {w.hausStufe}</div>
+        <div className="log">{W_HAUSEMO[Math.min((w.hausStufe || 1) - 1, 5)]} {w.haus} · Ausbaustufe {w.hausStufe}</div>
         <span className="lbl">Vermögen</span>
         <div className="log done">{w.geld} Taler</div>
-        <span className="lbl">Imperium</span>
-        {w.firma ? (
-          <div className="log done">
-            <b>{w.firma.name}</b> · Stufe {w.firma.stufe}{"\n\n"}{w.firma.idee}
-            {w.firma.gegruendetTag ? "\n\nGegründet an Tag " + w.firma.gegruendetTag : ""}
-          </div>
-        ) : <div className="log warn">Noch kein Unternehmen. Ab 120 Talern gründet er von selbst.</div>}
+        <span className="lbl">Unternehmen</span>
+        {f ? <button className="card" style={{ padding: 13 }} onClick={() => setBlick({ typ: "firma", id: f.id })}>
+          <div className="nm" style={{ fontSize: 16, color: "var(--tox)" }}>🏭 {f.name}</div>
+          <div className="mt">Stufe {f.stufe} · Software v{f.version}{f.bytes ? "" : " (wird gebaut)"} — tippen für die Ablage</div>
+        </button> : <div className="log warn">Noch kein Unternehmen. Ab 120 Talern kann {a.name} eins gründen.</div>}
+        {eigene.length > 0 && <><span className="lbl">Gebaut</span>{eigene.map((g) => <div key={g.id} className="log" style={{ marginTop: 6 }}>{W_EMO[g.art] || "🏗️"} <b>{g.name}</b> · Tag {g.tag}{g.beschreibung ? "\n" + g.beschreibung : ""}</div>)}</>}
         <span className="lbl">Eigenart</span>
         <div className="log">{w.eigenart}</div>
       </>
     );
   }
 
-  /* --- Weltübersicht --- */
-  const reichster = bewohner.slice().sort((x, y) => (y.welt.geld || 0) - (x.welt.geld || 0))[0];
-  const firmen = bewohner.filter((a) => a.welt.firma).length;
+  /* ---------- Übersicht ---------- */
+  const kacheln = [
+    ...aktive.map((id) => ({ k: "b" + id, emo: W_HAUSEMO[Math.min((bew[id].hausStufe || 1) - 1, 5)], name: prof[id].name, farbe: bew[id].farbe, klick: () => setBlick({ typ: "bewohner", id }), sub: bew[id].emoji })),
+    ...d.gebaeude.map((g) => ({ k: g.id, emo: W_EMO[g.art] || "🏗️", name: g.name, farbe: g.art === "firma" ? "#9BFF3D" : "#35355a",
+      klick: () => g.firmaId && d.firmen[g.firmaId] ? setBlick({ typ: "firma", id: g.firmaId }) : g.besitzer && bew[g.besitzer] ? setBlick({ typ: "bewohner", id: g.besitzer }) : null })),
+  ];
+  const V = d.verbrauch;
+  const pausiert = d.pauseBis && d.pauseBis > jetzt;
+  const status = laeuft ? "⏳ " + d.laeuft.was + " …"
+    : pausiert ? "⏸ Pause " + rel(d.pauseBis) + " (nach mehreren Fehlern)"
+    : ap.an && Object.keys(zug).some((k) => zug[k]) ? "🔄 Autopilot an · nächster Tag " + rel(d.naechsterLauf || jetzt)
+    : "Autopilot aus";
+  const setze = (patch) => tu(() => wPost("/welt/einstellungen", patch));
 
   return (
     <>
       <div className="gauge">
-        <b style={{ color: "var(--tox)" }}>Tag {tag}</b>
-        <span>{bewohner.length} Bewohner · {firmen} Unternehmen{reichster ? ` · reichster: ${reichster.name} (${reichster.welt.geld})` : ""}</span>
+        <b style={{ color: "var(--tox)" }}>Tag {d.tag}</b>
+        <span>{aktive.length} Bewohner · {firmen.length} Unternehmen · {d.gebaeude.filter((g) => g.art !== "firma").length} Gebäude</span>
       </div>
-
-      {!bewohner.length && (
-        <div className="log">Die Welt ist noch leer. Erschaffe Verkörperungen für deine Agenten — sie bekommen ein Gesicht, ein Zuhause und beginnen zu leben.</div>
-      )}
-
-      {neulinge.length > 0 && (
-        <>
-          <button className="btn tox" onClick={erschaffen} disabled={busy}>
-            {busy ? "erschafft…" : bewohner.length ? `${Math.min(neulinge.length, 8)} Neuling(e) einbürgern` : "Welt erschaffen"}
-          </button>
-          <div style={{ height: 12 }} />
-        </>
-      )}
-
-      {bewohner.length > 0 && (
-        <>
-          <button className="btn" onClick={tagVergehen} disabled={busy}>{busy ? "die Welt dreht sich…" : "Einen Tag vergehen lassen"}</button>
-          <div style={{ height: 16 }} />
-        </>
-      )}
-
+      <div className={"log " + (laeuft ? "warn" : "")}>{status}</div>
+      {d.letzterFehler && !laeuft && <div className="log err">Letzter Fehler: {d.letzterFehler.text}</div>}
       {err && <div className="log err">{err}</div>}
 
-      {letzterTag && (
-        <>
-          <span className="lbl">Tag {tag} · was geschah</span>
-          <div className="log done">{letzterTag.erzaehlung}</div>
-          {letzterTag.gespraech?.zeilen?.length > 0 && (
-            <>
-              <span className="lbl">Gespräch</span>
-              <div className="log">{letzterTag.gespraech.zeilen.join("\n")}</div>
-            </>
-          )}
-          {letzterTag.spiel && (<><span className="lbl">Spiel</span><div className="log warn">{letzterTag.spiel}</div></>)}
-          {(letzterTag.ereignisse || []).map((e, i) => (
-            <div key={i} className="log" style={{ marginTop: 6 }}>
-              <b>{e.wer}</b>: {e.tat}
-              {e.geld ? ` (${e.geld > 0 ? "+" : ""}${e.geld} Taler)` : ""}
-              {e.firmaNeu?.name ? ` — gründet ${e.firmaNeu.name}` : ""}
-              {e.hausNeu ? ` — baut aus: ${e.hausNeu}` : ""}
+      <span className="lbl">Wer darf in die Welt?</span>
+      <div className="log">Nur die Agenten, die du hier anhakst, leben in der Welt. Die Welt speichert sie selbst, auch wenn du die App schließt oder Daten neu einspielst.</div>
+      {agents.length === 0 && <div className="log warn">Noch keine Agenten in der App. Erst Daten einspielen oder Agenten bauen.</div>}
+      {agents.map((a) => {
+        const drin = gewaehlt.has(a.id), lebt = !!(zug[a.id] && bew[a.id]);
+        return (
+          <button key={a.id} className="card" style={{ padding: 12, borderLeft: "3px solid " + (drin ? "var(--tox)" : "var(--line)") }}
+            onClick={() => { const n = new Set(gewaehlt); n.has(a.id) ? n.delete(a.id) : n.add(a.id); setSel(n); }}>
+            <div className="row">
+              <div style={{ fontSize: 22, flex: "0 0 34px", textAlign: "center" }}>{drin ? "✅" : "⬜"}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="nm" style={{ fontSize: 15 }}>{bew[a.id] ? bew[a.id].emoji + " " : ""}{a.name}</div>
+                <div className="mt">{lebt ? "lebt in der Welt" : drin ? (zug[a.id] ? "wird gerade erschaffen …" : "kommt beim Übernehmen") : bew[a.id] ? "war schon in der Welt" : "draußen"}</div>
+              </div>
             </div>
+          </button>
+        );
+      })}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "10px 0 6px" }}>
+        <button className="btn ghost sm" onClick={() => setSel(new Set(agents.map((a) => a.id)))}>Alle</button>
+        <button className="btn ghost sm" onClick={() => setSel(new Set())}>Keine</button>
+        {geaendert && <button className="btn tox" disabled={busy} onClick={() => tu(async () => { const y = await wPost("/welt/zulassen", { agenten: agents.map(wProfil), an: [...gewaehlt] }); setSel(null); return y; })}>Übernehmen ({gewaehlt.size})</button>}
+      </div>
+
+      <div style={{ height: 8 }} />
+      <button className="btn" disabled={busy || laeuft || !Object.keys(zug).some((k) => zug[k])} onClick={() => tu(() => wPost("/welt/tag", {}))}>{laeuft ? "die Welt dreht sich …" : "Einen Tag vergehen lassen"}</button>
+      <div style={{ height: 10 }} />
+      <div className="seg">
+        {W_STUNDEN.map(([h, lb]) => <button key={h} className={String(ap.stunden) === h ? "on" : ""} onClick={() => setze({ stunden: Number(h) })}>{lb}</button>)}
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+        <button className={"btn " + (ap.an ? "tox" : "ghost") + " sm"} disabled={busy} onClick={() => setze({ an: !ap.an })}>Autopilot: {ap.an ? "AN" : "AUS"}</button>
+        <button className="btn ghost sm" disabled={busy} onClick={() => setze({ nurGratis: !ap.nurGratis })}>{ap.nurGratis ? "Nur Gratis-Modelle" : "Gratis + OpenAI"}</button>
+      </div>
+      <div className="log" style={{ marginTop: 10 }}>Heute: {V.tage} von max. {ap.maxTageProTag} Tagen · {V.aufrufe} KI-Aufrufe ({V.frei} gratis, {V.bezahlt} OpenAI). Der Autopilot lässt die Welt weiterlaufen, auch wenn die App zu ist.</div>
+
+      {kacheln.length > 0 && (
+        <>
+          <span className="lbl">Stadtplan</span>
+          <div className="wgrid">
+            {kacheln.map((t) => (
+              <button key={t.k} className="wtile" style={{ borderColor: t.farbe }} onClick={t.klick}>
+                <span className="wem">{t.emo}</span><span className="wnm">{t.name}</span>{t.sub && <span className="wsub">{t.sub}</span>}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {firmen.length > 0 && (
+        <>
+          <span className="lbl">Ablage · Firmen &amp; ihre Software</span>
+          {firmen.map((f) => (
+            <button key={f.id} className="card" style={{ padding: 13, borderLeft: "3px solid var(--tox)" }} onClick={() => setBlick({ typ: "firma", id: f.id })}>
+              <div className="nm" style={{ fontSize: 16 }}>🏭 {f.name}</div>
+              <div className="mt">{f.gruenderName} · Stufe {f.stufe} · {f.bytes ? "App v" + f.version : "App wird gebaut"}{f.verwaist ? " · ruht" : ""}</div>
+              <div className="dsc" style={{ marginTop: 4 }}>{f.idee}</div>
+            </button>
           ))}
         </>
       )}
 
-      {bewohner.length > 0 && (
+      {d.letzterTag && (
+        <>
+          <span className="lbl">Tag {d.letzterTag.tag} · was geschah</span>
+          <div className="log done">{d.letzterTag.erzaehlung}</div>
+          {d.letzterTag.gespraech && d.letzterTag.gespraech.length > 0 && <div className="log" style={{ marginTop: 6 }}>{d.letzterTag.gespraech.join("\n")}</div>}
+          {d.letzterTag.spiel && <div className="log warn" style={{ marginTop: 6 }}>{d.letzterTag.spiel}</div>}
+          {(d.letzterTag.ereignisse || []).map((e, i) => (
+            <div key={i} className="log" style={{ marginTop: 6 }}><b>{e.emoji} {e.wer}</b>: {e.tat}{e.geld ? " (" + (e.geld > 0 ? "+" : "") + e.geld + " Taler)" : ""}{e.notiz ? " — " + e.notiz : ""}</div>
+          ))}
+        </>
+      )}
+
+      {aktive.length > 0 && (
         <>
           <span className="lbl">Bewohner</span>
-          {bewohner.map((a) => {
-            const w = a.welt;
+          {aktive.map((id) => {
+            const w = bew[id], a = prof[id], f = w.firmaId && d.firmen[w.firmaId];
             return (
-              <button key={a.id} className="card" style={{ padding: 13, borderLeft: "3px solid " + w.farbe }} onClick={() => setBlick(a.id)}>
+              <button key={id} className="card" style={{ padding: 13, borderLeft: "3px solid " + w.farbe }} onClick={() => setBlick({ typ: "bewohner", id })}>
                 <div className="row">
                   <div style={{ fontSize: 28, flex: "0 0 40px", textAlign: "center" }}>{w.emoji}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="nm" style={{ fontSize: 16 }}>{a.name}</div>
                     <div className="mt">{w.haus} · {w.geld} Taler · {w.stimmung}</div>
-                    {w.firma && <div className="dsc" style={{ marginTop: 4, color: "var(--tox)" }}>{w.firma.name} · Stufe {w.firma.stufe}</div>}
+                    {f && <div className="dsc" style={{ marginTop: 4, color: "var(--tox)" }}>{f.name} · Stufe {f.stufe}</div>}
                   </div>
                 </div>
               </button>
@@ -2038,16 +2140,16 @@ Antworte NUR mit JSON.
         </>
       )}
 
-      {chronik.length > 0 && (
+      {d.chronik.length > 0 && (
         <>
           <span className="lbl">Chronik</span>
-          {chronik.slice(0, 12).map((c, i) => (
-            <div key={i} className={"log " + (c.art || "")} style={{ marginTop: 6 }}>
-              <b>Tag {c.tag}</b>{"\n"}{c.text}
-            </div>
-          ))}
+          {d.chronik.slice(0, 20).map((c, i) => <div key={i} className={"log " + (c.art || "")} style={{ marginTop: 6 }}><b>Tag {c.tag}</b>{"\n"}{c.text}</div>)}
         </>
       )}
+
+      <span className="lbl">Sicherheit</span>
+      <a className="btn ghost sm" href={window.nxServer() + "/welt/export?raum=" + encodeURIComponent((cloudCfg().raum) || "nemesis")}>Ganze Welt sichern (Datei)</a>
+      <div className="log" style={{ marginTop: 10 }}>Die Welt liegt auf deinem Server und hat automatische Sicherungskopien. Mit dem Knopf hast du sie zusätzlich als Datei, inklusive aller Firmen-Apps.</div>
     </>
   );
 }

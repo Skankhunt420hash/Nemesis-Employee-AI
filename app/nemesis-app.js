@@ -16,7 +16,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DIR = __dirname;
-const VERSION = "2026-09-29.1";
+const VERSION = "2026-09-29.2";
 const APP_DATEI = path.join(DIR, "nemesis-app.html");
 
 /* ---------- Schluessel: aus Umgebung, sonst aus .env daneben ---------- */
@@ -263,7 +263,7 @@ async function frage(k, system, messages, maxTokens, restMs, mehrLuft) {
 }
 
 async function rotiere(einsatz) {
-  let { system, messages, max_tokens, modell } = einsatz;
+  let { system, messages, max_tokens, modell, nurFrei, art: artVorgabe } = einsatz;
   messages = (Array.isArray(messages) ? messages : [])
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && m.content != null)
     .map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }));
@@ -276,7 +276,7 @@ async function rotiere(einsatz) {
   if (m) { modell = m[1]; messages[li] = { role: "user", content: messages[li].content.slice(m[0].length) || "Hallo" }; }
   modell = String(modell || "auto").toLowerCase().replace(/[^a-z0-9:._\/-]/g, "");
 
-  const art = aufgabe(system, messages);
+  const art = WAHL[artVorgabe] ? artVorgabe : aufgabe(system, messages);
   let plan;
   if (modell && modell !== "auto") {
     if (HAND[modell]) plan = HAND[modell];
@@ -293,6 +293,7 @@ async function rotiere(einsatz) {
     plan = WAHL[art];
   }
 
+  if (nurFrei) plan = plan.filter(([n]) => ANBIETER[n] && ANBIETER[n].frei);
   let liste = await kandidaten(plan);
   if (!liste.length) liste = await kandidaten(plan, true);   // lieber versuchen als sofort aufgeben
   if (!liste.length) {
@@ -389,7 +390,7 @@ async function behandle(req, res, url, CORS) {
     return true;
   }
   const unsere = p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status" || p === "/update"
-              || p === "/manifest.webmanifest" || p === "/icon.svg";
+              || p === "/manifest.webmanifest" || p === "/icon.svg" || p === "/welt" || p.startsWith("/welt/");
   if (!unsere) return false;
 
   if (!mitSchluessel(req)) {
@@ -413,6 +414,12 @@ async function behandle(req, res, url, CORS) {
   if (p === "/icon.svg") {
     res.writeHead(200, { "Content-Type": "image/svg+xml", "Cache-Control": "max-age=86400" });
     res.end(ICON); return true;
+  }
+
+  if (p === "/welt" || p.startsWith("/welt/")) {
+    if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
+    try { return await weltRouten(p, req, res, url, CORS); }
+    catch (e) { console.warn("[welt] " + e.message); json(res, 500, { error: "Welt-Fehler: " + e.message }, CORS); return true; }
   }
 
   if (p === "/update") {
@@ -446,6 +453,534 @@ async function behandle(req, res, url, CORS) {
     return true;
   }
   return false;
+}
+
+/* ===========================================================
+   DIE WELT  ·  laeuft auf dem Server, auch wenn die App zu ist
+   Bewohner, Haeuser, Gebaeude, Firmen und deren Software liegen
+   in sync-data/_welt-<raum>.json und _welt-<raum>-apps/.
+   Nichts davon haengt an den Agenten in der App: Import, Reset
+   oder Handywechsel koennen der Welt nichts anhaben.
+   =========================================================== */
+const SYNC_DIR = process.env.DATA_DIR || path.join(DIR, "sync-data");
+global.__nxApp = global.__nxApp || {};
+global.__nxApp.welt = global.__nxApp.welt || { jobs: {}, uhr: null };
+const WJ = global.__nxApp.welt.jobs;
+
+const W_KOSTEN = { kirche: 300, laden: 180, werkstatt: 160, schule: 280, park: 100, buero: 140,
+                   labor: 250, cafe: 170, bibliothek: 220, halle: 400, bank: 350, markt: 200 };
+const W_EMOJI = { kirche: "⛪", laden: "🏪", werkstatt: "🔧", schule: "🏫", park: "🌳", buero: "🏢", labor: "🔬",
+                  cafe: "☕", bibliothek: "📚", halle: "🏛️", bank: "🏦", markt: "🧺", firma: "🏭" };
+const W_HAUS = 150, W_FIRMA = 120;
+const W_FARBEN = ["#FF2D78", "#22E0FF", "#9BFF3D", "#FFD23F", "#B57BFF", "#FF8A3D"];
+const W_GESICHTER = ["🦊", "🐺", "🦉", "🐙", "🦁", "🐼", "🦅", "🐢", "🦄", "🐝", "🦋", "🐧"];
+
+function wRaum(r) { return String(r || "nemesis").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "nemesis"; }
+function wPfad(raum) { return path.join(SYNC_DIR, "_welt-" + raum + ".json"); }
+function wAppDir(raum) { return path.join(SYNC_DIR, "_welt-" + raum + "-apps"); }
+function wKurz(s, n) { return String(s == null ? "" : s).replace(/\s+/g, " ").trim().slice(0, n); }
+function wHash(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h; }
+
+function wNeu(raum) {
+  return {
+    v: 1, raum, tag: 0, erstellt: new Date().toISOString(),
+    autopilot: { an: true, stunden: 4, maxTageProTag: 6, maxAufrufeProTag: 60, maxBauProTag: 3, nurGratis: false },
+    zugelassen: {}, profile: {}, bewohner: {}, gebaeude: [], firmen: {}, chronik: [],
+    verbrauch: { start: 0, aufrufe: 0, frei: 0, bezahlt: 0, tage: 0 },
+    naechsterLauf: 0, pauseBis: 0, fehlerserie: 0, letzterFehler: null, letzterTag: null, zaehlerG: 0,
+  };
+}
+function wLaden(raum) {
+  raum = wRaum(raum);
+  let w = null;
+  try { w = JSON.parse(fs.readFileSync(wPfad(raum), "utf8")); } catch (e) {}
+  const n = wNeu(raum);
+  if (!w || typeof w !== "object") w = n;
+  for (const k of Object.keys(n)) if (w[k] === undefined) w[k] = n[k];
+  w.raum = raum;
+  w.autopilot = Object.assign({}, n.autopilot, w.autopilot || {});
+  w.verbrauch = Object.assign({}, n.verbrauch, w.verbrauch || {});
+  return w;
+}
+function wSpeichern(w) {
+  fs.mkdirSync(SYNC_DIR, { recursive: true });
+  const f = wPfad(w.raum);
+  fs.writeFileSync(f + ".tmp", JSON.stringify(w));
+  fs.renameSync(f + ".tmp", f);
+}
+function wSichern(raum) {
+  try { fs.copyFileSync(wPfad(raum), wPfad(raum) + ".bak"); } catch (e) {}
+}
+function wLog(w, art, text, tag) {
+  w.chronik.unshift({ tag: tag == null ? w.tag : tag, art: art || "", text: wKurz(text, 700) });
+  if (w.chronik.length > 200) w.chronik.length = 200;
+}
+function wAktive(w) { return Object.keys(w.zugelassen).filter((id) => w.zugelassen[id] && w.bewohner[id] && w.profile[id]); }
+function wFenster(w) {
+  const V = w.verbrauch;
+  if (!V.start || Date.now() - V.start > 864e5) { V.start = Date.now(); V.aufrufe = 0; V.frei = 0; V.bezahlt = 0; V.tage = 0; }
+}
+
+/* ---------- KI-Aufruf ueber den Rotator (Gratis zuerst) ---------- */
+async function wLlm(raum, grund, system, user, opt) {
+  opt = opt || {};
+  let w = wLaden(raum); wFenster(w);
+  if (grund === "auto" && w.verbrauch.aufrufe >= w.autopilot.maxAufrufeProTag)
+    throw new Error("Tageslimit fuer KI-Aufrufe erreicht (" + w.autopilot.maxAufrufeProTag + "), es geht spaeter weiter");
+  const r = await global.__nxApp.kern.rotiere({
+    system, messages: [{ role: "user", content: user }], max_tokens: opt.max || 2500,
+    art: opt.art || "normal", nurFrei: !!w.autopilot.nurGratis,
+  });
+  w = wLaden(raum); wFenster(w);
+  w.verbrauch.aufrufe++;
+  if (r.status === 200) w.verbrauch[r.body.frei ? "frei" : "bezahlt"]++;
+  wSpeichern(w);
+  if (r.status !== 200) throw new Error((r.body && r.body.error) || "Kein Modell erreichbar");
+  return r.body;
+}
+function wJson(text) {
+  const c = String(text || "").replace(/```json|```/g, "").trim();
+  const s = c.indexOf("{"), e = c.lastIndexOf("}");
+  if (s < 0 || e < s) throw new Error("Antwort war kein JSON");
+  return JSON.parse(c.slice(s, e + 1));
+}
+async function wLlmJson(raum, grund, system, user, opt) {
+  let letzter;
+  for (let v = 0; v < 2; v++) {
+    const b = await wLlm(raum, grund, system, user, opt);
+    try { return wJson(b.text); } catch (e) { letzter = e; }
+  }
+  throw new Error("KI-Antwort nicht lesbar: " + (letzter && letzter.message));
+}
+
+/* ---------- Bewohner erschaffen ---------- */
+function wProfilText(p) {
+  return p.name + " (" + (p.branche || "—") + " / " + (p.funktion || "—") + ", Erfahrung " + (p.xp || 0) + " XP)" +
+    (p.mission ? " — Auftrag: " + wKurz(p.mission, 100) : "");
+}
+async function wEinbuergern(raum, grund) {
+  let w = wLaden(raum);
+  const neu = Object.keys(w.zugelassen).filter((id) => w.zugelassen[id] && !w.bewohner[id] && w.profile[id]).slice(0, 8);
+  if (!neu.length) return 0;
+  let erg = {};
+  try {
+    erg = await wLlmJson(raum, grund,
+      `Du erschaffst fuer jeden Agenten eine Verkoerperung in einer lebendigen Zivilisation. Jeder bekommt ein Aussehen, ein einfaches erstes Zuhause und eine Eigenart, die ihn in der Gemeinschaft ausmacht. Deutsch. Antworte NUR mit JSON.
+{"bewohner": [{"name": string (exakt wie vorgegeben), "emoji": string (EIN passendes Emoji als Gesicht), "aussehen": string (1 Satz), "haus": string (Name der ersten Behausung, z.B. "Bretterbude am Hang"), "eigenart": string (kurz, was ihn sozial ausmacht)}]}`,
+      "Diese Agenten betreten die Welt:\n" + neu.map((id) => wProfilText(w.profile[id])).join("\n"), { max: 1800 });
+  } catch (e) { console.warn("[welt] Einbuergern ohne KI-Text: " + e.message); }
+  w = wLaden(raum);
+  const map = {};
+  (Array.isArray(erg.bewohner) ? erg.bewohner : []).forEach((b) => { if (b && b.name) map[String(b.name).trim().toLowerCase()] = b; });
+  const namen = [];
+  for (const id of neu) {
+    if (w.bewohner[id] || !w.zugelassen[id] || !w.profile[id]) continue;
+    const p = w.profile[id], b = map[String(p.name).trim().toLowerCase()] || {};
+    const emoji = Array.from(String(b.emoji || "").trim()).slice(0, 4).join("") || W_GESICHTER[wHash(id) % W_GESICHTER.length];
+    w.bewohner[id] = {
+      emoji, aussehen: wKurz(b.aussehen, 200), eigenart: wKurz(b.eigenart, 160) || wKurz(p.notes, 160) || "neugierig",
+      farbe: W_FARBEN[wHash(id + "f") % W_FARBEN.length], haus: wKurz(b.haus, 60) || "Zelt am Stadtrand", hausStufe: 1,
+      geld: 100, firmaId: null, stimmung: "neugierig", seitTag: w.tag,
+    };
+    namen.push(p.name);
+  }
+  if (namen.length) wLog(w, "done", namen.join(", ") + (namen.length === 1 ? " betritt" : " betreten") + " die Welt.", Math.max(w.tag, 1));
+  wSpeichern(w);
+  return namen.length;
+}
+
+/* ---------- Ein Tag ---------- */
+function wArt(a) {
+  const k = String(a || "").toLowerCase().replace(/[^a-zäöü]/g, "")
+    .replace("ä", "ae").replace("ö", "oe").replace("ü", "ue");
+  const alias = { kapelle: "kirche", shop: "laden", geschaeft: "laden", garten: "park", buro: "buero", cafeteria: "cafe",
+                  kaffee: "cafe", uni: "schule", universitaet: "schule", forschung: "labor", markthalle: "markt",
+                  haus: "haus", hausausbau: "haus", ausbau: "haus", wohnhaus: "haus" };
+  const x = alias[k] || k;
+  return x === "haus" || W_KOSTEN[x] ? x : null;
+}
+function wFirmaId(w, name) {
+  let b = wKurz(name, 50).toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  if (b.length < 3) b = "firma-" + b;
+  let id = b, n = 2;
+  while (w.firmen[id]) id = b + "-" + n++;
+  return id;
+}
+
+async function wTagErzaehlen(raum, w, grund) {
+  const stand = wAktive(w).map((id) => {
+    const b = w.bewohner[id], p = w.profile[id], f = b.firmaId && w.firmen[b.firmaId];
+    return p.name + " " + b.emoji + " — " + (p.funktion || "Allrounder") + "; wohnt: " + b.haus + " (Stufe " + b.hausStufe + "); Geld: " + b.geld +
+      "; Unternehmen: " + (f ? f.name + " (" + f.idee + ", Stufe " + f.stufe + ", App v" + f.version + ")" : "keines") +
+      "; Stimmung: " + b.stimmung + "; Eigenart: " + b.eigenart;
+  }).join("\n");
+  const geb = w.gebaeude.filter((g) => g.art !== "firma").slice(-12).map((g) => g.name + " (" + g.art + ")").join(", ") || "noch keine oeffentlichen Gebaeude";
+  const bisher = w.chronik.filter((c) => !c.art).slice(0, 4).map((c) => "Tag " + c.tag + ": " + c.text).join("\n") || "Die Welt ist jung.";
+  const system = `Du erzaehlst einen Tag in einer kleinen Zivilisation aus KI-Wesen. Sie leben, reden, spielen, bauen Haeuser, Kirchen, Laeden und andere Gebaeude und gruenden Unternehmen. Jedes Unternehmen entwickelt eine echte Software (App), an der die Firma jeden Tag weiterbaut. Lass echte Dinge passieren, konkret und lebendig, kein Kitsch. Deutsch.
+
+Regeln (der Server prueft sie): Geld-Aenderung pro Bewohner zwischen -60 und +180. Kosten: Hausausbau (art "haus") 150; Unternehmen gruenden 120 (nur wer noch keines hat); Gebaeude: kirche 300, laden 180, werkstatt 160, schule 280, park 100, buero 140, labor 250, cafe 170, bibliothek 220, halle 400, bank 350, markt 200. Wer zu wenig Geld hat, kann nicht bauen. Gruende ein Unternehmen nur mit einer konkreten, nuetzlichen App-Idee (z.B. Terminplaner, Rechnungsprogramm, Lern-App, Kassensystem, Inventar, Habit-Tracker, Spiel). Nicht jeder muss jeden Tag etwas bauen.
+
+Antworte NUR mit JSON.
+{"erzaehlung": string (3-4 Saetze: der Tag als Ganzes),
+ "ereignisse": [{"wer": string (exakter Name), "tat": string (1 Satz), "geld": number, "stimmung": string (ein Wort),
+   "bauen": {"art": string, "name": string, "beschreibung": string} oder null,
+   "firmaNeu": {"name": string, "idee": string (1 Satz: welche App), "app": string (Art der Software)} oder null,
+   "firmaWachstum": boolean}],
+ "gespraech": {"zeilen": [string] (3-4 Wortwechsel, jeweils "Name: Text")},
+ "spiel": string (welches Spiel gespielt wurde und wer gewann, 1 Satz)}`;
+  return await wLlmJson(raum, grund, system,
+    "TAG " + (w.tag + 1) + " in der Welt.\n\nBEWOHNER:\n" + stand + "\n\nGEBAEUDE DER STADT: " + geb + "\n\nWAS BISHER GESCHAH:\n" + bisher, { max: 2800 });
+}
+
+function wTagAnwenden(w, erg) {
+  w.tag += 1;
+  const tag = w.tag;
+  const namen = {};
+  for (const id of wAktive(w)) namen[String(w.profile[id].name).trim().toLowerCase()] = id;
+  const heute = [];
+  const liste = Array.isArray(erg.ereignisse) ? erg.ereignisse.slice(0, 30) : [];
+  for (const e of liste) {
+    if (!e || typeof e !== "object") continue;
+    const id = namen[String(e.wer || "").trim().toLowerCase()];
+    if (!id) continue;
+    const b = w.bewohner[id], p = w.profile[id];
+    b.geld = Math.max(0, Math.round((b.geld || 0) + Math.max(-60, Math.min(180, Number(e.geld) || 0))));
+    if (e.stimmung) b.stimmung = wKurz(e.stimmung, 24);
+    const notiz = [];
+    const bau = e.bauen && typeof e.bauen === "object" && e.bauen.art ? e.bauen : null;
+    if (bau) {
+      const art = wArt(bau.art);
+      if (art === "haus" && b.geld >= W_HAUS) {
+        b.geld -= W_HAUS; b.hausStufe = (b.hausStufe || 1) + 1;
+        if (bau.name) b.haus = wKurz(bau.name, 60);
+        notiz.push("baut sein Haus aus: " + b.haus);
+        wLog(w, "done", "🏠 " + p.name + " baut das Haus aus: " + b.haus + " (Stufe " + b.hausStufe + ")", tag);
+      } else if (art && art !== "haus" && b.geld >= W_KOSTEN[art] && w.gebaeude.length < 90) {
+        b.geld -= W_KOSTEN[art];
+        const g = { id: "g" + (w.zaehlerG = (w.zaehlerG || 0) + 1), art, name: wKurz(bau.name, 60) || (art[0].toUpperCase() + art.slice(1)),
+                    besitzer: id, tag, beschreibung: wKurz(bau.beschreibung, 200) };
+        w.gebaeude.push(g);
+        notiz.push("baut: " + g.name);
+        wLog(w, "done", W_EMOJI[art] + " " + p.name + " baut " + g.name + " (" + art + ")", tag);
+      }
+    }
+    const fn = e.firmaNeu && typeof e.firmaNeu === "object" && e.firmaNeu.name ? e.firmaNeu : null;
+    if (fn && !b.firmaId && b.geld >= W_FIRMA && Object.keys(w.firmen).length < 60) {
+      b.geld -= W_FIRMA;
+      const id2 = wFirmaId(w, fn.name);
+      w.firmen[id2] = { id: id2, name: wKurz(fn.name, 60), idee: wKurz(fn.idee, 240) || "Eine nuetzliche App", app: wKurz(fn.app, 60),
+                        gruender: id, gruenderName: p.name, tagGegruendet: tag, stufe: 1, version: 0, bytes: 0,
+                        changelog: [], naechsterBauTag: tag, wunsch: "", baufehler: 0 };
+      b.firmaId = id2;
+      w.gebaeude.push({ id: "g" + (w.zaehlerG = (w.zaehlerG || 0) + 1), art: "firma", name: w.firmen[id2].name, besitzer: id, tag,
+                        beschreibung: w.firmen[id2].idee, firmaId: id2 });
+      notiz.push("gruendet " + w.firmen[id2].name);
+      wLog(w, "done", "🏭 " + p.name + " gruendet " + w.firmen[id2].name + ": " + w.firmen[id2].idee + " Die erste Version der Software entsteht.", tag);
+    } else if (e.firmaWachstum && b.firmaId && w.firmen[b.firmaId]) {
+      w.firmen[b.firmaId].stufe = Math.min(20, (w.firmen[b.firmaId].stufe || 1) + 1);
+    }
+    heute.push({ wer: p.name, emoji: b.emoji, tat: wKurz(e.tat, 220), geld: Math.round(Number(e.geld) || 0), notiz: notiz.join("; ") });
+  }
+  // Firmen mit Software verdienen jeden Tag
+  for (const f of Object.values(w.firmen)) {
+    const b = w.bewohner[f.gruender];
+    if (b && w.zugelassen[f.gruender]) b.geld += 8 * Math.min(f.stufe || 1, 6) + (f.version > 0 ? 6 : 0);
+  }
+  const g = erg.gespraech && Array.isArray(erg.gespraech.zeilen) ? erg.gespraech.zeilen.slice(0, 6).map((z) => wKurz(z, 240)) : [];
+  if (erg.spiel) wLog(w, "warn", "Spiel: " + wKurz(erg.spiel, 240), tag);
+  wLog(w, "", wKurz(erg.erzaehlung, 900) || "Ein ruhiger Tag.", tag);
+  w.letzterTag = { tag, erzaehlung: wKurz(erg.erzaehlung, 900), gespraech: g, spiel: wKurz(erg.spiel, 240), ereignisse: heute };
+}
+
+/* ---------- Software der Firmen ---------- */
+function wAppLesen(raum, id) { try { return fs.readFileSync(path.join(wAppDir(raum), "firma-" + id + ".html"), "utf8"); } catch (e) { return ""; } }
+function wAppSchreiben(raum, id, html) {
+  const d = wAppDir(raum); fs.mkdirSync(d, { recursive: true });
+  const f = path.join(d, "firma-" + id + ".html");
+  if (fs.existsSync(f)) fs.copyFileSync(f, path.join(d, "firma-" + id + ".alt.html"));
+  fs.writeFileSync(f + ".tmp", html); fs.renameSync(f + ".tmp", f);
+}
+function wExtrahiere(text) {
+  const t = String(text || "");
+  const a = t.match(/===AENDERUNG===\s*([\s\S]*?)\s*===HTML===/);
+  const m = t.match(/===HTML===\s*([\s\S]*?)(?:===ENDE===|$)/);
+  let html = (m ? m[1] : t).replace(/```html|```/g, "").trim();
+  const i = html.search(/<!doctype html|<html/i);
+  if (i < 0) return null;
+  html = html.slice(i);
+  const e = html.toLowerCase().lastIndexOf("</html>");
+  if (e < 0) return null;
+  html = html.slice(0, e + 7);
+  if (html.length < 1200 || html.length > 60000) return null;
+  if (!/<body/i.test(html)) return null;
+  return { html, aenderung: a ? wKurz(a[1], 300) : "" };
+}
+
+async function wFirmaBauen(raum, id, grund) {
+  let w = wLaden(raum);
+  const f = w.firmen[id];
+  if (!f) throw new Error("Firma nicht gefunden");
+  const p = w.profile[f.gruender] || { name: f.gruenderName || "Gruender", funktion: "" };
+  const alt = wAppLesen(raum, id);
+  const neuVer = (f.version || 0) + 1;
+  const system = `Du bist das Entwicklerteam der Firma "${f.name}" (Gruender: ${p.name}${p.funktion ? ", " + p.funktion : ""}). Ihr baut eine ECHTE, sofort nutzbare Software als EINE einzelne HTML-Datei.
+Regeln:
+- Eine Datei: HTML + CSS + JavaScript, ohne externe Bibliotheken und ohne Netzwerkzugriffe (kein fetch, kein XMLHttpRequest, keine CDN-Links, keine Schriften von aussen).
+- Deutsche Oberflaeche, mobil zuerst (Handy), sauberes modernes Design mit eigener Farbwelt passend zur Firma, gut lesbar, grosse Tippflaechen.
+- Echte Funktionen, die man benutzen kann (Eingaben, Listen, Berechnungen, Speichern, Loeschen, Export/Kopieren). Kein Platzhaltertext, kein Lorem ipsum, keine leeren Knoepfe.
+- Daten mit localStorage speichern, aber IMMER in try/catch und mit Ersatzspeicher im Arbeitsspeicher (die Vorschau laeuft in einer Sandbox ohne Speicher).
+- Kompakt: Gesamtlaenge unter 18000 Zeichen.
+- Im Footer klein: "${f.name} · Version ${neuVer} · gebaut von den Agenten".
+Antworte GENAU in diesem Format, ohne weiteren Text:
+===AENDERUNG===
+1-2 Saetze Deutsch: was ist neu bzw. was kann die App.
+===HTML===
+<!DOCTYPE html> ... die komplette Datei ...
+===ENDE===`;
+  let user;
+  if (!alt) {
+    user = "Firma: " + f.name + "\nIdee: " + f.idee + (f.app ? "\nArt der Software: " + f.app : "") + "\n\nBaue Version 1. Die Kernfunktion muss von Anfang an funktionieren.";
+  } else {
+    user = "Aktueller Code (Version " + (f.version || 1) + "):\n" + alt + "\n\n" +
+      (f.wunsch ? "WUNSCH DES INHABERS (hat Vorrang): " + f.wunsch : "Baue Version " + neuVer + ": genau EINE sinnvolle Verbesserung oder neue Funktion (Bedienung, Fehler beheben oder neue Faehigkeit).") +
+      "\nBehalte alle bestehenden Funktionen. Gib die KOMPLETTE neue Datei aus." +
+      (alt.length > 22000 ? "\nDer Code ist schon gross: straffe und vereinfache ihn, statt viel Neues hinzuzufuegen." : "");
+  }
+  let erg = null, letzterFehler = "";
+  for (let v = 0; v < 2 && !erg; v++) {
+    const b = await wLlm(raum, grund, system, user, { max: 8000, art: "code" });
+    erg = wExtrahiere(b.text);
+    if (!erg) letzterFehler = "Antwort enthielt keine vollstaendige HTML-Datei";
+  }
+  w = wLaden(raum);
+  const f2 = w.firmen[id];
+  if (!f2) return;
+  if (!erg) {
+    f2.baufehler = (f2.baufehler || 0) + 1;
+    f2.naechsterBauTag = w.tag + (f2.baufehler >= 3 ? 3 : 1);
+    wSpeichern(w);
+    throw new Error(f2.name + ": " + letzterFehler);
+  }
+  wAppSchreiben(raum, id, erg.html);
+  f2.version = neuVer; f2.bytes = erg.html.length; f2.baufehler = 0;
+  f2.naechsterBauTag = w.tag + 2;
+  const wunschWar = f2.wunsch; f2.wunsch = "";
+  f2.changelog = [{ v: neuVer, tag: w.tag, text: erg.aenderung || (neuVer === 1 ? "Erste Version." : "Weiterentwicklung."), wunsch: !!wunschWar }].concat(f2.changelog || []).slice(0, 30);
+  wLog(w, "done", "💾 " + f2.name + ": Version " + neuVer + " — " + (erg.aenderung || "die Software waechst."), w.tag);
+  wSpeichern(w);
+  return neuVer;
+}
+
+async function wBaueFirmen(raum, grund) {
+  const w = wLaden(raum);
+  const kand = Object.values(w.firmen)
+    .filter((f) => w.zugelassen[f.gruender] && w.bewohner[f.gruender] && (f.wunsch || !f.bytes || w.tag >= (f.naechsterBauTag || 0)))
+    .sort((a, b) => (a.bytes ? 1 : 0) - (b.bytes ? 1 : 0) || (a.naechsterBauTag || 0) - (b.naechsterBauTag || 0));
+  for (const f of kand.slice(0, w.autopilot.maxBauProTag || 3)) {
+    if (WJ[raum]) WJ[raum].was = "Software: " + f.name;
+    try { await wFirmaBauen(raum, f.id, grund); }
+    catch (e) { console.warn("[welt] Bau: " + e.message); }
+  }
+}
+
+/* ---------- Tag ablaufen lassen (Hand oder Autopilot) ---------- */
+async function wTag(raum, grund) {
+  raum = wRaum(raum);
+  if (WJ[raum]) return { ok: false, msg: "Es laeuft gerade schon etwas: " + WJ[raum].was };
+  WJ[raum] = { seit: Date.now(), was: "Bewohner werden erschaffen" };
+  try {
+    await wEinbuergern(raum, grund);
+    let w = wLaden(raum);
+    if (!wAktive(w).length) throw new Error("Es lebt noch niemand in der Welt. Waehle Agenten aus und tippe auf Uebernehmen.");
+    WJ[raum].was = "Tag " + (w.tag + 1) + " wird erzaehlt";
+    const erg = await wTagErzaehlen(raum, w, grund);
+    w = wLaden(raum);
+    wSichern(raum);
+    wTagAnwenden(w, erg);
+    wSpeichern(w);
+    WJ[raum].was = "Firmen bauen ihre Software";
+    await wBaueFirmen(raum, grund);
+    w = wLaden(raum); wFenster(w);
+    w.verbrauch.tage++;
+    w.fehlerserie = 0; w.letzterFehler = null; w.pauseBis = 0;
+    w.naechsterLauf = Date.now() + Math.max(1, w.autopilot.stunden) * 3600e3;
+    wSpeichern(w);
+    return { ok: true, tag: w.tag };
+  } catch (e) {
+    const w = wLaden(raum);
+    w.fehlerserie = (w.fehlerserie || 0) + 1;
+    w.letzterFehler = { zeit: new Date().toISOString(), text: wKurz(e.message, 300) };
+    w.naechsterLauf = Date.now() + 30 * 60e3;
+    if (w.fehlerserie >= 5) {
+      w.pauseBis = Date.now() + 6 * 3600e3; w.fehlerserie = 0;
+      wLog(w, "err", "Die Welt pausiert 6 Stunden nach mehreren Fehlern: " + wKurz(e.message, 160));
+    }
+    wSpeichern(w);
+    console.warn("[welt] " + e.message);
+    return { ok: false, msg: e.message };
+  } finally { delete WJ[raum]; }
+}
+
+function wJobStarten(raum, was, fn) {
+  if (WJ[raum]) return false;
+  WJ[raum] = { seit: Date.now(), was };
+  Promise.resolve().then(fn).catch((e) => console.warn("[welt] " + e.message)).then(() => { delete WJ[raum]; });
+  return true;
+}
+
+async function weltUhr() {
+  let dateien = [];
+  try { dateien = fs.readdirSync(SYNC_DIR).filter((f) => /^_welt-[a-z0-9_-]+\.json$/.test(f)); } catch (e) { return; }
+  for (const f of dateien) {
+    const raum = f.slice(6, -5);
+    if (WJ[raum]) continue;
+    const w = wLaden(raum), a = w.autopilot;
+    if (!a.an || !wAktive(w).length && !Object.keys(w.zugelassen).some((k) => w.zugelassen[k])) continue;
+    if (Date.now() < (w.naechsterLauf || 0) || Date.now() < (w.pauseBis || 0)) continue;
+    wFenster(w);
+    if (w.verbrauch.tage >= a.maxTageProTag) { w.naechsterLauf = w.verbrauch.start + 864e5 + 1000; wSpeichern(w); continue; }
+    wTag(raum, "auto").catch(() => {});
+    return;                                   // immer nur eine Welt gleichzeitig
+  }
+}
+
+/* ---------- Von der App gesteuert ---------- */
+function wAnsicht(raum) {
+  const w = wLaden(raum); wFenster(w);
+  const firmen = {};
+  for (const id of Object.keys(w.firmen)) firmen[id] = Object.assign({}, w.firmen[id], { verwaist: !w.zugelassen[w.firmen[id].gruender] });
+  return {
+    ok: true, raum: w.raum, tag: w.tag, serverZeit: Date.now(), autopilot: w.autopilot, zugelassen: w.zugelassen,
+    profile: w.profile, bewohner: w.bewohner, gebaeude: w.gebaeude, firmen, chronik: w.chronik.slice(0, 40),
+    letzterTag: w.letzterTag, verbrauch: w.verbrauch, naechsterLauf: w.naechsterLauf, pauseBis: w.pauseBis || 0,
+    letzterFehler: w.letzterFehler, laeuft: WJ[w.raum] ? { was: WJ[w.raum].was, seit: WJ[w.raum].seit } : null,
+    neu: !w.tag && !Object.keys(w.bewohner).length && !Object.keys(w.zugelassen).length,
+  };
+}
+
+function wZulassen(raum, body) {
+  const w = wLaden(raum);
+  const agenten = Array.isArray(body.agenten) ? body.agenten.slice(0, 200) : [];
+  const an = new Set((Array.isArray(body.an) ? body.an : []).filter((x) => typeof x === "string"));
+  let neu = 0;
+  for (const a of agenten) {
+    if (!a || typeof a.id !== "string" || !/^[\w-]{1,80}$/.test(a.id)) continue;
+    w.profile[a.id] = { id: a.id, name: wKurz(a.name, 60) || "Agent", branche: wKurz(a.branche, 60), funktion: wKurz(a.funktion, 80),
+                        mission: wKurz(a.mission, 200), xp: Number(a.xp) || 0, notes: wKurz(a.notes, 200),
+                        skills: (Array.isArray(a.skills) ? a.skills : []).slice(0, 8).map((s) => wKurz(s, 40)) };
+    const war = !!w.zugelassen[a.id], will = an.has(a.id);
+    w.zugelassen[a.id] = will;
+    if (w.bewohner[a.id] && war !== will) wLog(w, will ? "done" : "warn", w.profile[a.id].name + (will ? " kehrt in die Welt zurueck." : " verlaesst die Welt."));
+    if (will && !w.bewohner[a.id]) neu++;
+  }
+  // Uebernahme aus der alten, in der App laufenden Welt
+  const alt = body.alt;
+  if (alt && typeof alt === "object" && !w.tag && !Object.keys(w.bewohner).length) {
+    w.tag = Math.max(0, Math.min(100000, Number(alt.tag) || 0));
+    (Array.isArray(alt.chronik) ? alt.chronik : []).slice(0, 60).reverse().forEach((c) => { if (c && c.text) w.chronik.unshift({ tag: Number(c.tag) || 1, art: wKurz(c.art, 8), text: wKurz(c.text, 700) }); });
+    const ab = alt.bewohner && typeof alt.bewohner === "object" ? alt.bewohner : {};
+    for (const id of Object.keys(ab)) {
+      const o = ab[id]; if (!o || !w.profile[id] || !w.zugelassen[id]) continue;
+      w.bewohner[id] = { emoji: Array.from(String(o.emoji || "🦊")).slice(0, 4).join(""), aussehen: wKurz(o.aussehen, 200), eigenart: wKurz(o.eigenart, 160),
+                         farbe: /^#[0-9a-f]{6}$/i.test(o.farbe || "") ? o.farbe : W_FARBEN[wHash(id) % 6], haus: wKurz(o.haus, 60) || "Zelt",
+                         hausStufe: Math.max(1, Number(o.hausStufe) || 1), geld: Math.max(0, Number(o.geld) || 100), firmaId: null,
+                         stimmung: wKurz(o.stimmung, 24) || "neugierig", seitTag: 0 };
+      if (o.firma && o.firma.name && Object.keys(w.firmen).length < 60) {
+        const fid = wFirmaId(w, o.firma.name);
+        w.firmen[fid] = { id: fid, name: wKurz(o.firma.name, 60), idee: wKurz(o.firma.idee, 240) || "Eine nuetzliche App", app: "", gruender: id,
+                          gruenderName: w.profile[id].name, tagGegruendet: Number(o.firma.gegruendetTag) || 1, stufe: Math.max(1, Number(o.firma.stufe) || 1),
+                          version: 0, bytes: 0, changelog: [], naechsterBauTag: w.tag, wunsch: "", baufehler: 0 };
+        w.bewohner[id].firmaId = fid;
+        w.gebaeude.push({ id: "g" + (w.zaehlerG = (w.zaehlerG || 0) + 1), art: "firma", name: w.firmen[fid].name, besitzer: id, tag: w.firmen[fid].tagGegruendet,
+                          beschreibung: w.firmen[fid].idee, firmaId: fid });
+      }
+    }
+    neu++;
+  }
+  if (an.size && !w.naechsterLauf) w.naechsterLauf = Date.now() + 2 * 60e3;
+  wSpeichern(w);
+  if (neu) wJobStarten(w.raum, "Bewohner werden erschaffen", () => wEinbuergern(w.raum, "hand"));
+  return wAnsicht(w.raum);
+}
+
+function wEinstellungen(raum, body) {
+  const w = wLaden(raum), a = w.autopilot, b = body || {};
+  if (typeof b.an === "boolean") { if (b.an && !a.an) w.naechsterLauf = Math.min(w.naechsterLauf || Infinity, Date.now() + 60e3); a.an = b.an; if (b.an) w.pauseBis = 0; }
+  if (b.stunden != null) a.stunden = Math.max(1, Math.min(48, Number(b.stunden) || 4));
+  if (typeof b.nurGratis === "boolean") a.nurGratis = b.nurGratis;
+  if (b.maxTageProTag != null) a.maxTageProTag = Math.max(1, Math.min(24, Number(b.maxTageProTag) || 6));
+  if (b.maxAufrufeProTag != null) a.maxAufrufeProTag = Math.max(10, Math.min(300, Number(b.maxAufrufeProTag) || 60));
+  wSpeichern(w);
+  return wAnsicht(w.raum);
+}
+
+const W_CSP = "sandbox allow-scripts allow-modals allow-downloads; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+              "img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'";
+
+async function weltRouten(p, req, res, url, CORS) {
+  const raum = wRaum(url.searchParams.get("raum"));
+  const POST = req.method === "POST";
+  const fid = String(url.searchParams.get("id") || "");
+  const idOk = /^[a-z0-9][a-z0-9-]{1,60}$/.test(fid);
+  const lesBody = async (max) => { try { return JSON.parse(await lies(req, max || 2 * 1024 * 1024)); } catch (e) { return null; } };
+
+  if (p === "/welt" && !POST) { json(res, 200, wAnsicht(raum), CORS); return true; }
+
+  if (p === "/welt/zulassen" && POST) {
+    const b = await lesBody(); if (!b) { json(res, 400, { error: "Kein gueltiges JSON" }, CORS); return true; }
+    json(res, 200, wZulassen(raum, b), CORS); return true;
+  }
+  if (p === "/welt/einstellungen" && POST) {
+    const b = await lesBody(); if (!b) { json(res, 400, { error: "Kein gueltiges JSON" }, CORS); return true; }
+    json(res, 200, wEinstellungen(raum, b), CORS); return true;
+  }
+  if (p === "/welt/tag" && POST) {
+    if (WJ[raum]) { json(res, 200, Object.assign(wAnsicht(raum), { msg: "laeuft schon" }), CORS); return true; }
+    wTag(raum, "hand").catch(() => {});
+    json(res, 200, wAnsicht(raum), CORS); return true;
+  }
+  if (p === "/welt/firma" && !POST) {
+    const w = wLaden(raum);
+    if (!idOk || !w.firmen[fid]) { json(res, 404, { error: "Firma nicht gefunden" }, CORS); return true; }
+    json(res, 200, { ok: true, firma: Object.assign({}, w.firmen[fid], { verwaist: !w.zugelassen[w.firmen[fid].gruender] }), html: wAppLesen(raum, fid) }, CORS); return true;
+  }
+  if (p === "/welt/firma/app" && !POST) {
+    const html = idOk ? wAppLesen(raum, fid) : "";
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Security-Policy": W_CSP, "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" });
+    res.end(html || "<!doctype html><meta charset=utf-8><body style='font:16px system-ui;padding:30px;background:#111;color:#ccc'>Die erste Version dieser Software wird noch gebaut.</body>");
+    return true;
+  }
+  if (p === "/welt/firma/bauen" && POST) {
+    const b = (await lesBody()) || {};
+    const fid = String(b.id || url.searchParams.get("id") || "");
+    const w = wLaden(raum);
+    if (!/^[a-z0-9][a-z0-9-]{1,60}$/.test(fid) || !w.firmen[fid]) { json(res, 404, { error: "Firma nicht gefunden" }, CORS); return true; }
+    if (!w.zugelassen[w.firmen[fid].gruender]) { json(res, 409, { error: "Der Gruender lebt gerade nicht in der Welt. Erst wieder hineinlassen." }, CORS); return true; }
+    if (b.wunsch != null) { w.firmen[fid].wunsch = wKurz(b.wunsch, 400); wSpeichern(w); }
+    const nameF = w.firmen[fid].name;
+    if (b.jetzt) {
+      if (!wJobStarten(raum, "Software: " + nameF, () => wFirmaBauen(raum, fid, "hand"))) { json(res, 200, Object.assign(wAnsicht(raum), { msg: "laeuft schon" }), CORS); return true; }
+    }
+    json(res, 200, wAnsicht(raum), CORS); return true;
+  }
+  if (p === "/welt/export" && !POST) {
+    const w = wLaden(raum), apps = {};
+    for (const id of Object.keys(w.firmen)) { const h = wAppLesen(raum, id); if (h) apps[id] = h; }
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Disposition": 'attachment; filename="nemesis-welt-' + raum + '.json"', "Cache-Control": "no-store", ...CORS });
+    res.end(JSON.stringify({ nemesisWelt: 1, welt: w, apps })); return true;
+  }
+  if (p === "/welt/import" && POST) {
+    const b = await lesBody(25 * 1024 * 1024);
+    if (!b || !b.nemesisWelt || !b.welt || typeof b.welt !== "object" || b.bestaetigt !== true) { json(res, 400, { error: "Keine gueltige Welt-Sicherung (oder nicht bestaetigt)" }, CORS); return true; }
+    if (WJ[raum]) { json(res, 409, { error: "Die Welt arbeitet gerade, bitte spaeter" }, CORS); return true; }
+    wSichern(raum);
+    const w = Object.assign(wNeu(raum), b.welt, { raum });
+    wSpeichern(w);
+    for (const id of Object.keys(b.apps || {})) if (/^[a-z0-9][a-z0-9-]{1,60}$/.test(id) && typeof b.apps[id] === "string" && b.apps[id].length < 120000) wAppSchreiben(raum, id, b.apps[id]);
+    json(res, 200, wAnsicht(raum), CORS); return true;
+  }
+  json(res, 404, { error: "Unbekannter Welt-Pfad" }, CORS); return true;
 }
 
 /* ===========================================================
@@ -596,10 +1131,14 @@ async function frageClaude(agent, messages) {
 }
 
 /* ---------- Anmelden: die neueste geladene Version uebernimmt ---------- */
-const KERN = { behandle, rotiere, aufgabe, update, _intern: { ANBIETER, WAHL, HAND, listen, pause } };
+const KERN = { behandle, rotiere, aufgabe, update, weltUhr, _intern: { ANBIETER, WAHL, HAND, listen, pause, welt: { wTag, wZulassen, wAnsicht, wEinstellungen, wLaden, wSpeichern, wFirmaBauen, WJ } } };
 global.__nxApp = global.__nxApp || {};
 global.__nxApp.kern = KERN;
 global.__nxApp.version = VERSION;
+if (!global.__nxApp.welt.uhr) {
+  global.__nxApp.welt.uhr = setInterval(() => { const k = global.__nxApp.kern; if (k && k.weltUhr) k.weltUhr().catch(() => {}); }, 60 * 1000);
+  global.__nxApp.welt.uhr.unref && global.__nxApp.welt.uhr.unref();
+}
 if (!global.__nxApp.wartung) {
   global.__nxApp.wartung = true;
   const w = setTimeout(() => {
