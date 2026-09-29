@@ -375,10 +375,47 @@ window.NX = {
     }catch(e){ prompt("Kopieren und sichern:", t); }
   },
   importAll(){
-    const t=prompt("Sicherung einf\u00fcgen:");
-    if(!t) return;
-    try{ const d=JSON.parse(t); Object.keys(d).forEach(k=>localStorage.setItem(k,d[k])); location.reload(); }
-    catch(e){ alert("Konnte nicht gelesen werden: "+e.message); }
+    var self=this, inp=document.createElement("input");
+    inp.type="file"; inp.accept=".json,application/json,text/plain,*/*"; inp.style.display="none";
+    inp.onchange=function(){
+      var f=inp.files&&inp.files[0]; if(!f) return;
+      var r=new FileReader();
+      r.onload=function(){ self.einspielen(String(r.result||"")); };
+      r.onerror=function(){ alert("Datei konnte nicht gelesen werden."); };
+      r.readAsText(f);
+    };
+    document.body.appendChild(inp); inp.click();
+    setTimeout(function(){ try{ document.body.removeChild(inp); }catch(e){} }, 120000);
+  },
+  async einspielen(t){
+    var out=document.getElementById("nxTest"); if(out){ out.style.display="block"; out.textContent="Lese Sicherung …"; }
+    function melde(x){ if(out) out.textContent=x; else alert(x); }
+    var d; try{ d=JSON.parse(String(t).replace(/^﻿/,"").trim()); }catch(e){ melde("❌ Das ist keine Nemesis-Sicherung (kein gueltiges JSON)."); return; }
+    // Zustand finden – egal welches Format (Zahnrad-Sicherung, Verkauf-Backup, reine Agentenliste)
+    var zustand=null, rest={};
+    if(Array.isArray(d)) zustand={agents:d};
+    else if(d && Array.isArray(d.agents)) zustand=d;
+    else if(d && typeof d==="object"){
+      var ks=["nemesis:lab:v9","nemesis:lab:v8","nemesis:lab:v7","nemesis:lab:v6","nemesis:lab:v5","nemesis:lab:v4","nemesis:lab:v3","nemesis:lab:v2","nemesis:agents"];
+      for(var i=0;i<ks.length && !zustand;i++){ if(d[ks[i]]){ try{ var v=JSON.parse(d[ks[i]]); zustand=Array.isArray(v)?{agents:v}:v; }catch(e){} } }
+      Object.keys(d).forEach(function(k){ if(!/^nemesis:(lab:v\d+|agents)$/.test(k) && k!=="nx:cfg" && k!=="nx:cloud") rest[k]=d[k]; });
+    }
+    if(!zustand || !Array.isArray(zustand.agents)){ melde("❌ In der Datei wurden keine Agenten gefunden."); return; }
+    var n=zustand.agents.length;
+    if(!confirm(n+" Agenten gefunden. Einspielen? (ersetzt die Agenten in dieser App)")) { melde("Abgebrochen."); return; }
+    try{
+      Object.keys(rest).forEach(function(k){ if(typeof rest[k]==="string") localStorage.setItem(k,rest[k]); });
+      localStorage.setItem("nemesis:lab:v9", JSON.stringify(zustand));
+    }catch(e){ melde("❌ Speicher auf dem Handy voll: "+e.message); return; }
+    // Auch auf den Server, sonst holt die App beim Neuladen den alten Server-Stand
+    var base=window.nxServer(), ok=!base;
+    if(base){
+      var cl={}; try{ cl=JSON.parse(localStorage.getItem("nx:cloud")||"{}"); }catch(e){}
+      try{ var r=await fetch(base+"/state?raum="+encodeURIComponent(cl.raum||"nemesis"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(zustand)}); ok=r.ok; }catch(e){ ok=false; }
+    }
+    melde(ok? "✅ "+n+" Agenten eingespielt"+(base?" und auf dem Server gesichert":"")+". Lade neu …"
+            : "⚠️ "+n+" Agenten auf dem Handy eingespielt, Server nicht erreicht. Lade neu …");
+    setTimeout(function(){ location.reload(); }, 1600);
   }
 };
 
@@ -5195,6 +5232,8 @@ function Backup({ agents, activity, models, commit, back }) {
       <textarea value={txt} placeholder="Backup-JSON einfügen…" className="code" style={{ minHeight: 100 }} onChange={(e) => setTxt(e.target.value)} />
       <div style={{ height: 10 }} />
       <button className="btn ghost" onClick={importIt}>Einspielen (überschreibt Roster)</button>
+      <div style={{ height: 10 }} />
+      <button className="btn cy" onClick={() => window.NX.importAll()}>Sicherungs-Datei wählen</button>
       {note && <div className="log warn" style={{ marginTop: 12 }}>{note}</div>}
     </>
   );
