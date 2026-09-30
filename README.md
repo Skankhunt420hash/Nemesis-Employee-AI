@@ -32,3 +32,10 @@ Läuft auf dem Server, auch wenn die App zu ist. Du wählst, welche Agenten hine
 Tage laufen automatisch (Autopilot, 1–24 Std), Bewohner bauen Häuser, Kirchen, Läden … und gründen Firmen. Jede Firma bekommt eine echte App
 (eine HTML-Datei), an der täglich weitergebaut wird. In der **Ablage** kannst du die App ausprobieren, kopieren oder Wünsche ans Team geben.
 Kosten-Bremsen: max. Tage und KI-Aufrufe pro 24 Std, optional nur Gratis-Modelle.
+
+### Neu in der Welt
+- **Wirtschaft:** Taler-Währung, Handel zwischen Bewohnern/Firmen, Firmenwert und Rangliste, Zufallsereignisse (Boom, Flaute, Sturm, Markttag, Fest), Stadtkasse mit Steuern.
+- **Politik:** Wahlen (alle 7 Tage), Bürgermeister, Gesetze (Steuer, Grundeinkommen, Bauzuschuss), Abstimmungen.
+- **Beziehungen & Charakter:** Freunde, Rivalen, Partner; fünf Charakterwerte, Lebensziel und Erinnerungen pro Bewohner.
+- **Karte:** Stadtplan mit Zeitraffer (Tab «Karte»).
+- **Firma → Produkt:** «Als Produkt anbieten» erzeugt eine öffentliche Verkaufsseite `/p/<raum>/<firma>` mit Live-Demo, Preis, Kontakt, Einbett-Code und Datei-Download.

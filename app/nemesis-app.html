@@ -1863,6 +1863,298 @@ const wProfil = (a) => ({
   mission: typeof a.mission === "string" ? a.mission : "", skills: a.skills || [], notes: (a.persona && a.persona.notes) || "",
 });
 
+const W_BEZ_EMO = { freund: "🤝", partner: "💞", team: "👥", neutral: "·", rivale: "⚔️", feind: "💢" };
+const W_EIG = [["mut", "Mut", "#FF8A3D"], ["neugier", "Neugier", "#22E0FF"], ["ehrgeiz", "Ehrgeiz", "#FF2D78"], ["guete", "Güte", "#9BFF3D"], ["humor", "Humor", "#FFD23F"]];
+const wRaumName = (r) => String(r || "nemesis").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || "nemesis";
+
+function WBalken({ c }) {
+  c = c || {};
+  return (
+    <div>
+      {W_EIG.map(([k, nm, farbe]) => (
+        <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", fontSize: 12 }}>
+          <span style={{ width: 64, color: "var(--mut)" }}>{nm}</span>
+          <div style={{ flex: 1, height: 8, background: "#1b1b2c" }}><div style={{ width: Math.max(0, Math.min(100, c[k] || 0)) + "%", height: "100%", background: farbe }} /></div>
+          <span style={{ width: 26, textAlign: "right" }}>{c[k] || 0}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------- Karte: Stadtplan zum Anschauen, mit Zeitraffer ---------- */
+function WeltKarte({ d, oeffne }) {
+  const [bis, setBis] = useState(null);
+  const [zoom, setZoom] = useState(1);
+  const [spielt, setSpielt] = useState(false);
+  const [sel, setSel] = useState(null);
+  const box = useRef(null);
+  const B = bis == null ? d.tag : Math.min(bis, d.tag);
+  useEffect(() => {
+    if (!spielt) return;
+    const t = setInterval(() => setBis((b) => { const n = (b == null ? 0 : b) + 1; if (n >= d.tag) { setSpielt(false); return null; } return n; }), 700);
+    return () => clearInterval(t);
+  }, [spielt, d.tag]);
+  useEffect(() => {
+    const el = box.current; if (!el) return;
+    el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2; el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
+  }, []);
+  const bew = d.bewohner, prof = d.profile, zug = d.zugelassen;
+  const S = 44;
+  const alleLeute = Object.keys(bew).filter((id) => prof[id] && bew[id].pos);
+  const alleGeb = d.gebaeude.filter((g) => g.pos);
+  let ext = 6;
+  alleLeute.forEach((id) => { ext = Math.max(ext, Math.abs(bew[id].pos.x) + 2, Math.abs(bew[id].pos.y) + 2); });
+  alleGeb.forEach((g) => { ext = Math.max(ext, Math.abs(g.pos.x) + 2, Math.abs(g.pos.y) + 2); });
+  ext = Math.ceil(ext / 3) * 3;
+  const dim = (2 * ext + 1) * S, o = -ext * S - S / 2;
+  const leute = alleLeute.filter((id) => (bew[id].seitTag || 0) <= B);
+  const geb = alleGeb.filter((g) => (g.tag || 0) <= B);
+  const strassen = [];
+  for (let k = -ext; k <= ext; k += 3) strassen.push(k);
+  const m = d.stadt.buergermeisterAktiv;
+  let info = null;
+  if (sel && sel.typ === "b" && prof[sel.id]) info = { titel: bew[sel.id].emoji + " " + prof[sel.id].name, sub: bew[sel.id].haus + " · " + bew[sel.id].geld + " Taler" + (m === sel.id ? " · Bürgermeister" : ""), klick: () => oeffne({ typ: "bewohner", id: sel.id }) };
+  if (sel && sel.typ === "g") {
+    const g = d.gebaeude.find((x) => x.id === sel.id);
+    if (g) info = { titel: (W_EMO[g.art] || "🏗️") + " " + g.name, sub: g.art + " · gebaut Tag " + g.tag + (g.beschreibung ? " · " + g.beschreibung : ""),
+      klick: g.firmaId && d.firmen[g.firmaId] ? () => oeffne({ typ: "firma", id: g.firmaId }) : g.besitzer && bew[g.besitzer] ? () => oeffne({ typ: "bewohner", id: g.besitzer }) : null };
+  }
+  const kurz = (s) => { s = String(s || ""); return s.length > 9 ? s.slice(0, 8) + "…" : s; };
+  return (
+    <>
+      <div className="log">Stadtplan von Tag {B}{B < d.tag ? " (Zeitraffer)" : ""}. Tippe auf ein Haus oder Gebäude. Die Figuren laufen um ihr Zuhause.</div>
+      <div ref={box} style={{ overflow: "auto", maxHeight: "58vh", border: "1px solid var(--line)", background: "#0a0a12", margin: "10px 0", touchAction: "pan-x pan-y pinch-zoom" }}>
+        <svg width={dim * zoom} height={dim * zoom} viewBox={o + " " + o + " " + dim + " " + dim} style={{ display: "block" }}>
+          <rect x={o} y={o} width={dim} height={dim} fill="#0c1410" />
+          {strassen.map((k) => <rect key={"h" + k} x={o} y={k * S - S / 2} width={dim} height={S} fill="#1d1d2c" />)}
+          {strassen.map((k) => <rect key={"v" + k} x={k * S - S / 2} y={o} width={S} height={dim} fill="#1d1d2c" />)}
+          {strassen.map((k) => <line key={"hl" + k} x1={o} x2={o + dim} y1={k * S} y2={k * S} stroke="#2c2c44" strokeDasharray="6 8" />)}
+          {strassen.map((k) => <line key={"vl" + k} y1={o} y2={o + dim} x1={k * S} x2={k * S} stroke="#2c2c44" strokeDasharray="6 8" />)}
+          <circle cx={0} cy={0} r={S * 0.95} fill="#23233a" stroke="#9BFF3D" strokeWidth="2" />
+          <text x={0} y={-2} textAnchor="middle" dominantBaseline="central" fontSize="30">🏛️</text>
+          <text x={0} y={22} textAnchor="middle" fontSize="8" fill="#9494b0">{m && prof[m] ? "Bürgermeister " + kurz(prof[m].name) : "Rathaus"}</text>
+          {geb.map((g) => {
+            const cx = g.pos.x * S, cy = g.pos.y * S, fa = g.art === "firma";
+            return (
+              <g key={g.id} onClick={() => setSel({ typ: "g", id: g.id })} style={{ cursor: "pointer" }}>
+                <rect x={cx - S / 2 + 3} y={cy - S / 2 + 3} width={S - 6} height={S - 6} fill="#171726" stroke={sel && sel.id === g.id ? "#fff" : fa ? "#9BFF3D" : "#4a4a70"} strokeWidth={sel && sel.id === g.id ? 2.5 : 1.5} />
+                <text x={cx} y={cy - 4} textAnchor="middle" dominantBaseline="central" fontSize="22">{W_EMO[g.art] || "🏗️"}</text>
+                <text x={cx} y={cy + S / 2 - 7} textAnchor="middle" fontSize="7.5" fill="#c8c8dc">{kurz(g.name)}</text>
+              </g>
+            );
+          })}
+          {leute.map((id, i) => {
+            const b = bew[id], cx = b.pos.x * S, cy = b.pos.y * S, lebt = !!zug[id];
+            const dur = 6 + (i % 5) * 1.3;
+            return (
+              <g key={id} onClick={() => setSel({ typ: "b", id })} style={{ cursor: "pointer", opacity: lebt ? 1 : 0.4 }}>
+                <rect x={cx - S / 2 + 3} y={cy - S / 2 + 3} width={S - 6} height={S - 6} fill="#171726" stroke={sel && sel.id === id ? "#fff" : b.farbe} strokeWidth={sel && sel.id === id ? 2.5 : 1.5} />
+                <text x={cx - 8} y={cy - 8} textAnchor="middle" dominantBaseline="central" fontSize="20">{W_HAUSEMO[Math.min((b.hausStufe || 1) - 1, 5)]}</text>
+                <text x={cx + 8} y={cy + 2} textAnchor="middle" dominantBaseline="central" fontSize="15">
+                  {b.emoji}
+                  {lebt && <animateTransform attributeName="transform" type="translate" dur={dur + "s"} repeatCount="indefinite" values="0 0; 6 -4; 0 -8; -12 -4; 0 0" />}
+                </text>
+                <text x={cx} y={cy + S / 2 - 7} textAnchor="middle" fontSize="7.5" fill={b.farbe}>{kurz(prof[id].name)}</text>
+                {m === id && <text x={cx + 12} y={cy - 14} textAnchor="middle" fontSize="11">🎖️</text>}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      {info && (
+        <div className="card" style={{ padding: 12, borderColor: "var(--tox)" }}>
+          <div className="nm" style={{ fontSize: 16 }}>{info.titel}</div>
+          <div className="mt">{info.sub}</div>
+          {info.klick && <button className="btn tox sm" style={{ marginTop: 10 }} onClick={info.klick}>Öffnen</button>}
+        </div>
+      )}
+      {d.tag > 0 && (
+        <>
+          <span className="lbl">Zeitraffer · Tag {B} von {d.tag}</span>
+          <input type="range" min="0" max={d.tag} value={B} style={{ width: "100%" }} onChange={(e) => { setSpielt(false); const v = Number(e.target.value); setBis(v >= d.tag ? null : v); }} />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+            <button className="btn tox sm" onClick={() => { if (spielt) setSpielt(false); else { setBis(0); setSpielt(true); } }}>{spielt ? "Stopp" : "▶ Stadt wachsen sehen"}</button>
+            <button className="btn ghost sm" onClick={() => setZoom((z) => Math.max(0.6, +(z - 0.3).toFixed(1)))}>−</button>
+            <button className="btn ghost sm" onClick={() => setZoom((z) => Math.min(2.4, +(z + 0.3).toFixed(1)))}>＋</button>
+          </div>
+        </>
+      )}
+      <div className="log" style={{ marginTop: 10 }}>{leute.length} Häuser · {geb.filter((g) => g.art !== "firma").length} Gebäude · {geb.filter((g) => g.art === "firma").length} Firmen</div>
+    </>
+  );
+}
+
+/* ---------- Wirtschaft ---------- */
+function WeltGeld({ d, oeffne }) {
+  const V = d.wirtschaft.verlauf || [], max = Math.max(1, ...V.map((v) => v.umsatz));
+  const firmen = Object.values(d.firmen).sort((a, b) => b.wert - a.wert);
+  const ids = Object.keys(d.bewohner).filter((id) => d.zugelassen[id] && d.profile[id]).sort((a, b) => d.bewohner[b].geld - d.bewohner[a].geld);
+  const st = d.stadt;
+  return (
+    <>
+      <div className="gauge">
+        <b style={{ color: "var(--amber)" }}>{d.wirtschaft.umsatz}</b>
+        <span>Taler Gesamtumsatz der Welt<br />Stadtkasse: {st.kasse} Taler · Steuer {st.steuer}%</span>
+      </div>
+      {d.lage && d.lage.id !== "ruhig" && <div className="log warn">Lage jetzt: {d.lage.text}</div>}
+      {V.length > 1 && (
+        <>
+          <span className="lbl">Umsatz pro Tag</span>
+          <div className="log" style={{ padding: 10 }}>
+            <svg viewBox={"0 0 " + Math.max(V.length * 12, 60) + " 60"} style={{ width: "100%", height: 90 }} preserveAspectRatio="none">
+              {V.map((v, i) => <rect key={i} x={i * 12 + 1} y={58 - (v.umsatz / max) * 54} width="10" height={(v.umsatz / max) * 54 + 0.5} fill="#FFD23F" />)}
+            </svg>
+            <div style={{ fontSize: 11, color: "var(--mut)" }}>Tag {V[0].tag} bis {V[V.length - 1].tag} · Spitze {max} Taler</div>
+          </div>
+        </>
+      )}
+      <span className="lbl">Rangliste der Firmen</span>
+      {firmen.length === 0 && <div className="log">Noch keine Firmen. Sobald ein Bewohner gründet, erscheint sie hier.</div>}
+      {firmen.map((f, i) => (
+        <button key={f.id} className="card" style={{ padding: 12, borderLeft: "3px solid var(--amber)" }} onClick={() => oeffne({ typ: "firma", id: f.id })}>
+          <div className="nm" style={{ fontSize: 15 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "🏭"} {f.name}</div>
+          <div className="mt">Wert {f.wert} · Umsatz {f.umsatz || 0} · Stufe {f.stufe} · {f.handel || 0} Geschäfte{f.produkt && f.produkt.an ? " · 🟢 im Verkauf" : ""}</div>
+        </button>
+      ))}
+      <span className="lbl">Vermögen der Bewohner</span>
+      {ids.map((id) => (
+        <div key={id} className="log" style={{ marginTop: 6, cursor: "pointer" }} onClick={() => oeffne({ typ: "bewohner", id })}>
+          {d.bewohner[id].emoji} <b>{d.profile[id].name}</b> · {d.bewohner[id].geld} Taler{d.stadt.buergermeisterAktiv === id ? " · 🎖️" : ""}
+        </div>
+      ))}
+      <span className="lbl">Letzte Geschäfte</span>
+      {d.handel.length === 0 && <div className="log">Noch kein Handel. Die Bewohner kaufen und verkaufen sich Leistungen, sobald sie sich kennen.</div>}
+      {d.handel.slice(0, 15).map((h, i) => (
+        <div key={i} className="log" style={{ marginTop: 6 }}><b>Tag {h.tag}</b> · {h.kaeuferName} kauft bei {h.verkaeuferName}: {h.ware} — {h.preis} Taler</div>
+      ))}
+    </>
+  );
+}
+
+/* ---------- Politik ---------- */
+function WeltPolitik({ d, oeffne }) {
+  const st = d.stadt, m = st.buergermeisterAktiv, prof = d.profile, bew = d.bewohner;
+  return (
+    <>
+      <div className="card" style={{ borderColor: "var(--tox)" }}>
+        {m && prof[m] ? (
+          <div className="row" style={{ cursor: "pointer" }} onClick={() => oeffne({ typ: "bewohner", id: m })}>
+            <div style={{ fontSize: 40, flex: "0 0 52px", textAlign: "center" }}>{bew[m].emoji}</div>
+            <div><div className="nm" style={{ fontSize: 18, color: "var(--tox)" }}>🎖️ {prof[m].name}</div><div className="mt">Bürgermeister seit Tag {st.amtSeit} · nächste Wahl Tag {st.naechsteWahl}</div></div>
+          </div>
+        ) : <div className="dsc">Noch kein Bürgermeister. Die erste Wahl findet statt, sobald mindestens zwei Bewohner leben.</div>}
+      </div>
+      <div className="wgrid" style={{ gridTemplateColumns: "repeat(2,1fr)" }}>
+        <div className="wtile" style={{ cursor: "default" }}><span className="wem">🧾</span><span className="wnm">Steuer {st.steuer}%</span></div>
+        <div className="wtile" style={{ cursor: "default" }}><span className="wem">🏦</span><span className="wnm">Kasse {st.kasse} Taler</span></div>
+        <div className="wtile" style={{ cursor: "default" }}><span className="wem">🎁</span><span className="wnm">Grundeinkommen {st.grundeinkommen}/Tag</span></div>
+        <div className="wtile" style={{ cursor: "default" }}><span className="wem">🏗️</span><span className="wnm">Bauzuschuss {st.bauzuschuss}%</span></div>
+      </div>
+      <span className="lbl">Gesetze</span>
+      {d.gesetze.length === 0 && <div className="log">Noch keine Gesetze. Der Bürgermeister kann Steuern, Grundeinkommen und Bauzuschüsse vorschlagen, die Bewohner stimmen ab.</div>}
+      {d.gesetze.map((g, i) => (
+        <div key={i} className={"log " + (g.angenommen ? "done" : "warn")} style={{ marginTop: 6 }}>
+          <b>{g.angenommen ? "✅" : "❌"} {g.titel}</b> · Tag {g.tag} · {g.ja} : {g.nein}{"\n"}{g.text}
+          {g.angenommen && g.art !== "keine" ? "\nWirkung: " + { steuer: "Steuer", grundeinkommen: "Grundeinkommen", bauzuschuss: "Bauzuschuss" }[g.art] + " = " + g.wert : ""}
+        </div>
+      ))}
+      <span className="lbl">Wahlen</span>
+      {d.wahlen.length === 0 && <div className="log">Noch keine Wahl.</div>}
+      {d.wahlen.map((wa, i) => {
+        const tot = Math.max(1, wa.kandidaten.reduce((s, k) => s + k.stimmen, 0));
+        return (
+          <div key={i} className="card" style={{ padding: 12 }}>
+            <div className="nm" style={{ fontSize: 15 }}>🗳️ Wahl an Tag {wa.tag}: {wa.gewinnerName}</div>
+            {wa.kandidaten.map((k) => (
+              <div key={k.id} style={{ margin: "7px 0", fontSize: 13 }}>
+                <div>{k.name} · {k.stimmen} Stimme{k.stimmen === 1 ? "" : "n"}</div>
+                <div style={{ height: 7, background: "#1b1b2c", margin: "3px 0" }}><div style={{ width: (k.stimmen / tot * 100) + "%", height: "100%", background: k.id === wa.gewinner ? "#9BFF3D" : "#4a4a70" }} /></div>
+                {k.programm && <div style={{ color: "var(--mut)", fontSize: 12 }}>«{k.programm}»</div>}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/* ---------- Leute: Charaktere und Beziehungen ---------- */
+function WeltLeute({ d, oeffne }) {
+  const ids = Object.keys(d.bewohner).filter((id) => d.zugelassen[id] && d.profile[id]);
+  return (
+    <>
+      <span className="lbl">Beziehungen</span>
+      {d.beziehungen.length === 0 && <div className="log">Noch keine engen Beziehungen. Sie entstehen im Zusammenleben: Handel, Streit, Wahlen.</div>}
+      {d.beziehungen.slice(0, 20).map((r, i) => d.profile[r.a] && d.profile[r.b] && (
+        <div key={i} className={"log " + (r.wert < 0 ? "warn" : "done")} style={{ marginTop: 6 }}>
+          {W_BEZ_EMO[r.art] || "·"} <b>{d.profile[r.a].name}</b> &amp; <b>{d.profile[r.b].name}</b> · {r.art} ({r.wert > 0 ? "+" : ""}{r.wert}){r.grund ? "\n" + r.grund : ""}
+        </div>
+      ))}
+      <span className="lbl">Charaktere</span>
+      {ids.map((id) => {
+        const b = d.bewohner[id];
+        return (
+          <button key={id} className="card" style={{ padding: 13, borderLeft: "3px solid " + b.farbe }} onClick={() => oeffne({ typ: "bewohner", id })}>
+            <div className="nm" style={{ fontSize: 16 }}>{b.emoji} {d.profile[id].name} {d.stadt.buergermeisterAktiv === id ? "🎖️" : ""}</div>
+            {b.ziel && <div className="mt">Ziel: {b.ziel}</div>}
+            <div style={{ marginTop: 6 }}><WBalken c={b.charakter} /></div>
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+/* ---------- Firma als Produkt verkaufen ---------- */
+function VerkaufBox({ f, tu, busy, laeuft }) {
+  const P = f.produkt || {};
+  const [preis, setPreis] = useState(P.preis || "");
+  const [kontakt, setKontakt] = useState(P.kontakt || "");
+  useEffect(() => { setPreis(P.preis || ""); }, [P.preis]);
+  const raum = wRaumName((cloudCfg().raum) || "nemesis");
+  const link = location.origin + "/p/" + raum + "/" + f.id;
+  const embed = '<iframe src="' + link + '" style="width:100%;height:760px;border:0" title="' + f.name.replace(/"/g, "") + '"></iframe>';
+  const senden = (extra) => tu(() => wPost("/welt/firma/produkt", Object.assign({ id: f.id, preis, kontakt }, extra)));
+  const paket = window.nxServer() + "/welt/firma/paket?raum=" + encodeURIComponent((cloudCfg().raum) || "nemesis") + "&id=" + encodeURIComponent(f.id);
+  if (!f.bytes) return <div className="log">Verkaufen geht, sobald die erste Version der Software steht.</div>;
+  if (!P.an) return (
+    <>
+      <div className="log">Mit einem Tipp wird aus der Software ein Produkt: Verkaufsseite mit Text, Preisvorschlag und Live-Demo. Öffentlich per Link, ohne Login für deine Kunden.</div>
+      <div style={{ height: 10 }} />
+      <button className="btn tox" disabled={busy || laeuft} onClick={() => senden({ an: true, texte: true })}>🚀 Als Produkt anbieten</button>
+    </>
+  );
+  return (
+    <>
+      <div className="log done">🟢 Online · {f.aufrufe || 0} Aufrufe</div>
+      <div className="card" style={{ padding: 13, marginTop: 8 }}>
+        <div className="nm" style={{ fontSize: 16 }}>{P.titel}</div>
+        <div className="dsc" style={{ marginTop: 4 }}>{P.claim}</div>
+        <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 13, color: "var(--mut)" }}>{(P.vorteile || []).map((v, i) => <li key={i}>{v}</li>)}</ul>
+      </div>
+      <span className="lbl">Link für deine Kunden</span>
+      <a className="btn cy sm" href={link} target="_blank" rel="noopener" style={{ wordBreak: "break-all", display: "block", textAlign: "center" }}>{link}</a>
+      <span className="lbl">Preis (so steht er auf der Seite)</span>
+      <input value={preis} placeholder="z.B. CHF 9 / Monat" onChange={(e) => setPreis(e.target.value)} />
+      <span className="lbl">Kontakt für Anfragen (E-Mail oder Link)</span>
+      <input value={kontakt} placeholder="z.B. hallo@deine-firma.ch" onChange={(e) => setKontakt(e.target.value)} />
+      <div style={{ height: 10 }} />
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button className="btn tox sm" disabled={busy || laeuft} onClick={() => senden({})}>Speichern</button>
+        <button className="btn ghost sm" disabled={busy || laeuft} onClick={() => senden({ texte: true })}>Texte neu schreiben</button>
+        <button className="btn ghost sm" disabled={busy || laeuft} onClick={() => senden({ an: false })}>Offline nehmen</button>
+      </div>
+      <span className="lbl">In einen Shop einbauen</span>
+      <Deliverable text={embed} filename="einbetten.html" hint="Diesen Code in die Seite des Kunden einfügen, fertig." />
+      <div style={{ height: 10 }} />
+      <a className="btn ghost sm" href={paket}>Verkaufsseite als Datei laden</a>
+      <div className="log" style={{ marginTop: 8 }}>Die Datei ist komplett (Seite und App in einem), du kannst sie auf jeden Webspace legen.</div>
+    </>
+  );
+}
+
 function Welt({ agents, welt }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
@@ -1873,6 +2165,7 @@ function Welt({ agents, welt }) {
   const [wunsch, setWunsch] = useState("");
   const [busy, setBusy] = useState(false);
   const [off, setOff] = useState(0);
+  const [tab, setTab] = useState("stadt");
   const [, tick] = useState(0);
   const migriert = useRef(false);
 
@@ -1950,6 +2243,7 @@ function Welt({ agents, welt }) {
           <div className="nm" style={{ fontSize: 20, color: "var(--tox)" }}>🏭 {f.name}</div>
           <div className="mt">Gegründet von {f.gruenderName} · Tag {f.tagGegruendet} · Stufe {f.stufe} · Software v{f.version}</div>
           <div className="dsc" style={{ marginTop: 10 }}>{f.idee}</div>
+          <div className="mt" style={{ marginTop: 8 }}>Firmenwert {f.wert} · Umsatz {f.umsatz || 0} Taler · {f.handel || 0} Geschäfte</div>
         </div>
         {f.verwaist && <div className="log warn">{f.gruenderName} lebt gerade nicht in der Welt. Die Firma ruht, du kannst die Software trotzdem kopieren. Lass {f.gruenderName} wieder hinein, dann wird weitergebaut.</div>}
         {laeuft && <div className="log">⏳ {d.laeuft.was} …</div>}
@@ -1968,6 +2262,9 @@ function Welt({ agents, welt }) {
             <div className="log" style={{ marginTop: 8 }}>Datei als «.html» speichern und am Handy oder PC öffnen. Sie gehört dir, ohne Abo, ohne Server.</div>
           </>
         ) : <div className="log">Die erste Version wird gebaut. Das passiert beim nächsten Weltentag oder gleich mit dem Knopf unten.</div>}
+
+        <span className="lbl" style={{ marginTop: 16 }}>Verkaufen · Firma → Produkt</span>
+        <VerkaufBox f={f} tu={tu} busy={busy} laeuft={laeuft} />
 
         <span className="lbl" style={{ marginTop: 16 }}>Weiterbauen lassen</span>
         <input value={wunsch} placeholder="Wunsch ans Team, z.B. «Dunkles Design» oder «PDF-Export»" onChange={(e) => setWunsch(e.target.value)} />
@@ -2001,7 +2298,7 @@ function Welt({ agents, welt }) {
         <div className="card" style={{ borderColor: w.farbe }}>
           <div className="row">
             <div style={{ fontSize: 40, flex: "0 0 52px", textAlign: "center" }}>{w.emoji}</div>
-            <div><div className="nm" style={{ fontSize: 19, color: w.farbe }}>{a.name}</div><div className="mt">{a.funktion || a.branche || "Bewohner"} · {w.stimmung}{zug[blick.id] ? "" : " · nicht in der Welt"}</div></div>
+            <div><div className="nm" style={{ fontSize: 19, color: w.farbe }}>{a.name}</div><div className="mt">{a.funktion || a.branche || "Bewohner"} · {w.stimmung}{d.stadt.buergermeisterAktiv === blick.id ? " · 🎖️ Bürgermeister" : ""}{zug[blick.id] ? "" : " · nicht in der Welt"}</div></div>
           </div>
           <div className="dsc" style={{ marginTop: 10 }}>{w.aussehen}</div>
         </div>
@@ -2017,6 +2314,18 @@ function Welt({ agents, welt }) {
         {eigene.length > 0 && <><span className="lbl">Gebaut</span>{eigene.map((g) => <div key={g.id} className="log" style={{ marginTop: 6 }}>{W_EMO[g.art] || "🏗️"} <b>{g.name}</b> · Tag {g.tag}{g.beschreibung ? "\n" + g.beschreibung : ""}</div>)}</>}
         <span className="lbl">Eigenart</span>
         <div className="log">{w.eigenart}</div>
+        <span className="lbl">Charakter</span>
+        <div className="log"><WBalken c={w.charakter} />{w.ziel ? "\nLebensziel: " + w.ziel : ""}</div>
+        {(w.erinnerungen || []).length > 0 && <><span className="lbl">Erinnerungen</span>{w.erinnerungen.slice(0, 5).map((e, i) => <div key={i} className="log" style={{ marginTop: 6 }}><b>Tag {e.tag}</b> · {e.text}</div>)}</>}
+        {d.beziehungen.filter((r) => (r.a === blick.id || r.b === blick.id) && prof[r.a] && prof[r.b]).length > 0 && (
+          <>
+            <span className="lbl">Beziehungen</span>
+            {d.beziehungen.filter((r) => (r.a === blick.id || r.b === blick.id) && prof[r.a] && prof[r.b]).map((r, i) => {
+              const anderer = r.a === blick.id ? r.b : r.a;
+              return <div key={i} className={"log " + (r.wert < 0 ? "warn" : "done")} style={{ marginTop: 6, cursor: "pointer" }} onClick={() => setBlick({ typ: "bewohner", id: anderer })}>{W_BEZ_EMO[r.art] || "·"} <b>{prof[anderer].name}</b> · {r.art} ({r.wert > 0 ? "+" : ""}{r.wert}){r.grund ? "\n" + r.grund : ""}</div>;
+            })}
+          </>
+        )}
       </>
     );
   }
@@ -2034,8 +2343,7 @@ function Welt({ agents, welt }) {
     : ap.an && Object.keys(zug).some((k) => zug[k]) ? "🔄 Autopilot an · nächster Tag " + rel(d.naechsterLauf || jetzt)
     : "Autopilot aus";
   const setze = (patch) => tu(() => wPost("/welt/einstellungen", patch));
-
-  return (
+  const kopf = (
     <>
       <div className="gauge">
         <b style={{ color: "var(--tox)" }}>Tag {d.tag}</b>
@@ -2044,6 +2352,25 @@ function Welt({ agents, welt }) {
       <div className={"log " + (laeuft ? "warn" : "")}>{status}</div>
       {d.letzterFehler && !laeuft && <div className="log err">Letzter Fehler: {d.letzterFehler.text}</div>}
       {err && <div className="log err">{err}</div>}
+      <div style={{ height: 10 }} />
+      <div className="seg">
+        {[["stadt", "Stadt"], ["karte", "🗺️Karte"], ["geld", "💰Geld"], ["politik", "🗳️Politik"], ["leute", "❤️Leute"]].map(([k, lb]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{lb}</button>)}
+      </div>
+    </>
+  );
+  if (tab !== "stadt") return (
+    <>
+      {kopf}
+      {tab === "karte" && <WeltKarte d={d} oeffne={setBlick} />}
+      {tab === "geld" && <WeltGeld d={d} oeffne={setBlick} />}
+      {tab === "politik" && <WeltPolitik d={d} oeffne={setBlick} />}
+      {tab === "leute" && <WeltLeute d={d} oeffne={setBlick} />}
+    </>
+  );
+
+  return (
+    <>
+      {kopf}
 
       <span className="lbl">Wer darf in die Welt?</span>
       <div className="log">Nur die Agenten, die du hier anhakst, leben in der Welt. Die Welt speichert sie selbst, auch wenn du die App schließt oder Daten neu einspielst.</div>
@@ -2083,7 +2410,7 @@ function Welt({ agents, welt }) {
 
       {kacheln.length > 0 && (
         <>
-          <span className="lbl">Stadtplan</span>
+          <span className="lbl">Alle Bauten</span>
           <div className="wgrid">
             {kacheln.map((t) => (
               <button key={t.k} className="wtile" style={{ borderColor: t.farbe }} onClick={t.klick}>

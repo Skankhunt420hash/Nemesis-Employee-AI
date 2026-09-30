@@ -16,7 +16,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DIR = __dirname;
-const VERSION = "2026-09-29.2";
+const VERSION = "2026-09-30.1";
 const APP_DATEI = path.join(DIR, "nemesis-app.html");
 
 /* ---------- Schluessel: aus Umgebung, sonst aus .env daneben ---------- */
@@ -368,7 +368,7 @@ const ICON = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect 
 
 /* ---------- Zweites Schloss ---------- */
 const OEFFENTLICH = [/^\/$/, /^\/health$/, /^\/embed\.js$/, /^\/api\/chat$/, /^\/api\/agent\/[^/]+$/,
-                     /^\/a\/[^/]+\/?$/, /^\/favicon\.ico$/, /^\/robots\.txt$/];
+                     /^\/a\/[^/]+\/?$/, /^\/p\/[a-z0-9_-]+\/[a-z0-9-]+\/?$/, /^\/favicon\.ico$/, /^\/robots\.txt$/];
 function vonAussen(req) {
   const h = req.headers || {};
   if (h["x-forwarded-for"] || h["x-real-ip"] || h["x-forwarded-proto"] || h["forwarded"]) return true;
@@ -389,6 +389,8 @@ async function behandle(req, res, url, CORS) {
     json(res, 401, { error: "Kein Zugang" }, CORS);
     return true;
   }
+  const pm = p.match(/^\/p\/([a-z0-9_-]{1,40})\/([a-z0-9][a-z0-9-]{1,60})\/?$/);
+  if (pm && (req.method === "GET" || req.method === "HEAD")) return produktSeite(pm[1], pm[2], res);
   const unsere = p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status" || p === "/update"
               || p === "/manifest.webmanifest" || p === "/icon.svg" || p === "/welt" || p.startsWith("/welt/");
   if (!unsere) return false;
@@ -488,6 +490,8 @@ function wNeu(raum) {
     zugelassen: {}, profile: {}, bewohner: {}, gebaeude: [], firmen: {}, chronik: [],
     verbrauch: { start: 0, aufrufe: 0, frei: 0, bezahlt: 0, tage: 0 },
     naechsterLauf: 0, pauseBis: 0, fehlerserie: 0, letzterFehler: null, letzterTag: null, zaehlerG: 0,
+    stadt: { kasse: 0, steuer: 5, grundeinkommen: 0, bauzuschuss: 0, buergermeister: null, amtSeit: 0, naechsteWahl: 3 },
+    gesetze: [], wahlen: [], handel: [], beziehungen: {}, wirtschaft: { umsatz: 0, verlauf: [] },
   };
 }
 function wLaden(raum) {
@@ -500,6 +504,11 @@ function wLaden(raum) {
   w.raum = raum;
   w.autopilot = Object.assign({}, n.autopilot, w.autopilot || {});
   w.verbrauch = Object.assign({}, n.verbrauch, w.verbrauch || {});
+  w.stadt = Object.assign({}, n.stadt, w.stadt || {});
+  w.wirtschaft = Object.assign({}, n.wirtschaft, w.wirtschaft || {});
+  for (const k of ["gesetze", "wahlen", "handel"]) if (!Array.isArray(w[k])) w[k] = [];
+  if (!w.beziehungen || typeof w.beziehungen !== "object" || Array.isArray(w.beziehungen)) w.beziehungen = {};
+  wErgaenzen(w);
   return w;
 }
 function wSpeichern(w) {
@@ -553,6 +562,310 @@ async function wLlmJson(raum, grund, system, user, opt) {
   throw new Error("KI-Antwort nicht lesbar: " + (letzter && letzter.message));
 }
 
+/* ---------- Charakter, Karte, Wirtschaft, Politik ---------- */
+const W_EIGENSCHAFTEN = ["mut", "neugier", "ehrgeiz", "guete", "humor"];
+const W_BEZ_ARTEN = ["freund", "partner", "team", "neutral", "rivale", "feind"];
+const W_EREIGNISSE = [
+  { id: "ruhig", text: "Ein normaler Tag ohne Besonderheiten.", mult: 1, bau: 1 },
+  { id: "ruhig", text: "Ein normaler Tag ohne Besonderheiten.", mult: 1, bau: 1 },
+  { id: "ruhig", text: "Ein normaler Tag ohne Besonderheiten.", mult: 1, bau: 1 },
+  { id: "boom", text: "Wirtschaftsboom: die Geschaefte laufen, Einnahmen +50%.", mult: 1.5, bau: 1 },
+  { id: "flaute", text: "Flaute: die Kunden sind sparsam, Einnahmen -40%.", mult: 0.6, bau: 1 },
+  { id: "sturm", text: "Sturm zieht ueber die Stadt: Bauen kostet 20% mehr.", mult: 1, bau: 1.2 },
+  { id: "markt", text: "Grosser Markttag: Einnahmen +20%, viel Handel in den Gassen.", mult: 1.2, bau: 1 },
+  { id: "fest", text: "Stadtfest: gute Laune, die Leute feiern.", mult: 1, bau: 1 },
+];
+function wEreignis(raum, tag) { return W_EREIGNISSE[wHash(raum + ":" + tag) % W_EREIGNISSE.length]; }
+function wKey(a, b) { return a < b ? a + "|" + b : b + "|" + a; }
+function wStdCharakter(id) {
+  const c = {}; W_EIGENSCHAFTEN.forEach((k) => { c[k] = 30 + (wHash(id + k) % 41); }); return c;
+}
+function wErgaenzen(w) {
+  for (const id of Object.keys(w.bewohner)) {
+    const b = w.bewohner[id];
+    if (!b.charakter || typeof b.charakter !== "object") b.charakter = wStdCharakter(id);
+    for (const k of W_EIGENSCHAFTEN) if (!Number.isFinite(b.charakter[k])) b.charakter[k] = 50;
+    if (!Array.isArray(b.erinnerungen)) b.erinnerungen = [];
+    if (typeof b.ziel !== "string") b.ziel = "";
+  }
+  wPlatzieren(w);
+}
+// Karte: Bewohner und Gebaeude bekommen einmal einen festen Platz (Strassen alle 3 Felder, Mitte = Rathausplatz)
+function wPlatzieren(w) {
+  const alle = [];
+  for (const id of Object.keys(w.bewohner)) alle.push({ o: w.bewohner[id], t: w.bewohner[id].seitTag || 0, s: 0 });
+  for (const g of w.gebaeude) alle.push({ o: g, t: g.tag || 0, s: 1 });
+  const hat = (o) => o.pos && Number.isFinite(o.pos.x) && Number.isFinite(o.pos.y);
+  const offen = alle.filter((a) => !hat(a.o));
+  if (!offen.length) return;
+  const belegt = new Set(alle.filter((a) => hat(a.o)).map((a) => a.o.pos.x + "," + a.o.pos.y));
+  offen.sort((a, b) => a.t - b.t || a.s - b.s);
+  let R = 6, zellen = [];
+  const bauen = () => {
+    zellen = [];
+    for (let x = -R; x <= R; x++) for (let y = -R; y <= R; y++) {
+      if (((x % 3) + 3) % 3 === 0 || ((y % 3) + 3) % 3 === 0) continue;
+      if (!belegt.has(x + "," + y)) zellen.push({ x, y, d: x * x + y * y + (wHash(x + ":" + y) % 7) / 7 });
+    }
+    zellen.sort((a, b) => a.d - b.d);
+  };
+  bauen();
+  while (zellen.length < offen.length) { R += 3; bauen(); }
+  offen.forEach((a, i) => { a.o.pos = { x: zellen[i].x, y: zellen[i].y }; });
+}
+// Beziehungen zwischen zwei Bewohnern (-100 Feind ... +100 beste Freunde)
+function wBez(w, a, b, delta, art, grund) {
+  if (!a || !b || a === b) return null;
+  const k = wKey(a, b);
+  const r = w.beziehungen[k] || { a: a < b ? a : b, b: a < b ? b : a, wert: 0, art: "neutral", tag: w.tag, grund: "" };
+  const alt = r.art;
+  r.wert = Math.max(-100, Math.min(100, Math.round(r.wert + (Number(delta) || 0))));
+  let neu = W_BEZ_ARTEN.includes(art) ? art : null;
+  if (neu && ["freund", "partner", "team"].includes(neu) && r.wert < 10) neu = null;
+  if (neu && ["rivale", "feind"].includes(neu) && r.wert > -10) neu = null;
+  if (neu === "neutral" && Math.abs(r.wert) > 40) neu = null;
+  if (!neu) neu = r.wert >= 55 ? "freund" : r.wert <= -55 ? "feind" : r.wert <= -25 ? "rivale"
+    : ((r.art === "partner" || r.art === "team" || r.art === "freund") && r.wert >= 20) ? r.art : "neutral";
+  r.art = neu; r.tag = w.tag; if (grund) r.grund = wKurz(grund, 140);
+  w.beziehungen[k] = r;
+  const keys = Object.keys(w.beziehungen);
+  if (keys.length > 300) {
+    keys.sort((x, y) => Math.abs(w.beziehungen[x].wert) - Math.abs(w.beziehungen[y].wert));
+    keys.slice(0, keys.length - 300).forEach((x) => { delete w.beziehungen[x]; });
+  }
+  return { alt, neu };
+}
+function wBezText(w, ids) {
+  const s = new Set(ids);
+  const l = Object.values(w.beziehungen).filter((r) => s.has(r.a) && s.has(r.b) && Math.abs(r.wert) >= 10)
+    .sort((x, y) => Math.abs(y.wert) - Math.abs(x.wert)).slice(0, 10);
+  return l.map((r) => w.profile[r.a].name + " – " + w.profile[r.b].name + ": " + r.art + " (" + (r.wert > 0 ? "+" : "") + r.wert + ")").join("\n") || "noch keine engen Beziehungen";
+}
+function wBuergermeister(w) {
+  const m = w.stadt.buergermeister;
+  return m && w.profile[m] && w.zugelassen[m] && w.bewohner[m] ? m : null;
+}
+function wStadtText(w) {
+  const st = w.stadt, m = wBuergermeister(w);
+  const ges = w.gesetze.filter((g) => g.angenommen && g.art !== "keine").slice(0, 3).map((g) => g.titel).join("; ");
+  return "Buergermeister: " + (m ? w.profile[m].name : "keiner") + " · Steuer " + st.steuer + "% auf Firmeneinnahmen · Grundeinkommen " + st.grundeinkommen +
+    " Taler/Tag · Bauzuschuss " + st.bauzuschuss + "% · Stadtkasse " + st.kasse + " Taler" + (ges ? " · Neueste Gesetze: " + ges : "");
+}
+function wFirmenwert(f) { return (f.stufe || 1) * 120 + (f.version || 0) * 45 + Math.round((f.umsatz || 0) * 0.6); }
+
+/* ---------- Politik und Zusammenleben (zweiter, freiwilliger KI-Aufruf pro Tag) ---------- */
+async function wGesellschaft(raum, grund) {
+  let w = wLaden(raum);
+  const ids = wAktive(w);
+  if (!ids.length) return;
+  const st = w.stadt, m = wBuergermeister(w);
+  if (!m && ids.length === 1) {                     // ein einziger Bewohner: automatisch Buergermeister
+    st.buergermeister = ids[0]; st.amtSeit = w.tag; st.naechsteWahl = w.tag + 7;
+    wLog(w, "done", "🗳️ " + w.profile[ids[0]].name + " ist mangels Konkurrenz Buergermeister.", w.tag);
+    wSpeichern(w);
+  }
+  const wahltag = ids.length >= 2 && (m ? w.tag >= (st.naechsteWahl || 0) : w.tag >= 2);
+  const name = (id) => w.profile[id].name;
+  const buerger = ids.map((id) => {
+    const b = w.bewohner[id], c = b.charakter;
+    const mem = (b.erinnerungen || []).slice(0, 2).map((e) => e.text).join(" / ");
+    return name(id) + ": " + W_EIGENSCHAFTEN.map((k) => k + " " + c[k]).join(", ") + "; Ziel: " + (b.ziel || "keins") + "; Erinnerung: " + (mem || "-");
+  }).join("\n");
+  const lt = w.letzterTag || {};
+  const heute = (lt.ereignisse || []).map((e) => e.wer + ": " + e.tat).join("\n");
+  const system = `Du bist der Chronist einer kleinen Zivilisation aus KI-Wesen. Nach dem Tagesgeschehen wertest du das Zusammenleben aus: Beziehungen, Charakterentwicklung und Politik. Nur Personen aus der Liste, exakte Namen. Entscheidungen muessen zu den Charakteren und Beziehungen passen (wer geizig/ehrgeizig ist, will niedrige Steuern; wer gueetig ist, will Hilfe fuer alle; Freunde waehlen sich eher). Deutsch. Antworte NUR mit JSON.
+{"beziehungen": [{"a": Name, "b": Name, "aenderung": Zahl von -25 bis 25, "art": "freund|partner|team|neutral|rivale|feind", "grund": ein kurzer Satz}]   (0 bis 5 Eintraege, nur wo heute zwischen den beiden wirklich etwas geschah),
+ "entwicklung": [{"wer": Name, "erinnerung": ein Satz was er sich merkt, "ziel": neues Lebensziel oder null, "charakter": {"mut": Zahl -5..5, "neugier": Zahl, "ehrgeiz": Zahl, "guete": Zahl, "humor": Zahl}}]   (nur fuer die, denen heute etwas Praegendes geschah),
+ "wahl": ${wahltag ? '{"kandidaten": [{"wer": Name, "programm": ein Satz}], "stimmen": [{"wer": Name des Waehlers, "fuer": Name des Kandidaten}]}   (HEUTE IST WAHLTAG: 2 oder mehr Kandidaten, JEDER Bewohner stimmt ab, auch fuer sich selbst erlaubt)' : "null"},
+ "gesetz": ${m ? '{"titel": kurz, "text": 1-2 Saetze, "wirkung": {"art": "steuer|grundeinkommen|bauzuschuss|keine", "wert": Zahl}, "stimmen": [{"wer": Name, "ja": true oder false}]} oder null   (der Buergermeister darf einen Vorschlag machen, muss aber nicht)' : "null"}}
+Wirkung: steuer = Prozent (0-25) auf Firmeneinnahmen; grundeinkommen = Taler pro Bewohner und Tag (0-15) aus der Stadtkasse; bauzuschuss = Prozent (0-40) Nachlass beim Bauen, aus der Stadtkasse bezahlt.`;
+  const user = "TAG " + w.tag + (wahltag ? " (WAHLTAG)" : "") + "\nLage: " + wEreignis(raum, w.tag).text + "\n\nWAS HEUTE GESCHAH:\n" + (lt.erzaehlung || "-") + "\n" + heute +
+    "\n\nBEWOHNER:\n" + buerger + "\n\nBEZIEHUNGEN:\n" + wBezText(w, ids) + "\n\nSTADT: " + wStadtText(w);
+  const erg = await wLlmJson(raum, grund, system, user, { max: 2600 });
+  w = wLaden(raum);
+  wSichern(raum);
+  wGesellschaftAnwenden(w, erg && typeof erg === "object" ? erg : {}, wahltag);
+  wSpeichern(w);
+}
+
+function wNamenIds(w) {
+  const namen = {};
+  for (const id of wAktive(w)) namen[String(w.profile[id].name).trim().toLowerCase()] = id;
+  return (n) => namen[String(n || "").trim().toLowerCase()];
+}
+
+function wGesellschaftAnwenden(w, erg, wahltag) {
+  const tag = w.tag, st = w.stadt, idVon = wNamenIds(w);
+  for (const r of (Array.isArray(erg.beziehungen) ? erg.beziehungen.slice(0, 8) : [])) {
+    if (!r || typeof r !== "object") continue;
+    const a = idVon(r.a), b = idVon(r.b);
+    const x = wBez(w, a, b, Math.max(-25, Math.min(25, Number(r.aenderung) || 0)), r.art, r.grund);
+    if (x && x.alt !== x.neu && x.neu !== "neutral")
+      wLog(w, x.neu === "feind" || x.neu === "rivale" ? "warn" : "done",
+        (x.neu === "feind" || x.neu === "rivale" ? "⚔️ " : "🤝 ") + w.profile[a].name + " und " + w.profile[b].name + ": " + x.neu + (r.grund ? " — " + wKurz(r.grund, 120) : ""), tag);
+  }
+  for (const e of (Array.isArray(erg.entwicklung) ? erg.entwicklung.slice(0, 12) : [])) {
+    const id = e && idVon(e.wer); if (!id) continue;
+    const b = w.bewohner[id];
+    if (e.erinnerung) { b.erinnerungen.unshift({ tag, text: wKurz(e.erinnerung, 180) }); b.erinnerungen.length = Math.min(b.erinnerungen.length, 8); }
+    if (e.ziel && typeof e.ziel === "string") b.ziel = wKurz(e.ziel, 120);
+    const c = e.charakter && typeof e.charakter === "object" ? e.charakter : {};
+    for (const k of W_EIGENSCHAFTEN) {
+      const d = Math.max(-5, Math.min(5, Math.round(Number(c[k]) || 0)));
+      if (d) b.charakter[k] = Math.max(0, Math.min(100, b.charakter[k] + d));
+    }
+  }
+  if (wahltag) wWahl(w, erg.wahl, idVon);
+  const m = wBuergermeister(w), g = erg.gesetz && typeof erg.gesetz === "object" && erg.gesetz.titel ? erg.gesetz : null;
+  if (g && m && !(w.gesetze[0] && tag - w.gesetze[0].tag < 2)) {
+    let ja = 0, nein = 0; const gesehen = new Set();
+    for (const s of (Array.isArray(g.stimmen) ? g.stimmen : [])) {
+      const v = s && idVon(s.wer); if (!v || gesehen.has(v)) continue;
+      gesehen.add(v);
+      if (s.ja === false || s.ja === "false") nein++; else ja++;
+    }
+    if (!gesehen.has(m)) ja++;
+    const wk = g.wirkung && typeof g.wirkung === "object" ? g.wirkung : {};
+    const art = ["steuer", "grundeinkommen", "bauzuschuss"].includes(wk.art) ? wk.art : "keine";
+    const grenze = { steuer: 25, grundeinkommen: 15, bauzuschuss: 40, keine: 0 }[art];
+    const wert = Math.max(0, Math.min(grenze, Math.round(Number(wk.wert) || 0)));
+    const angenommen = ja > nein;
+    if (angenommen && art !== "keine") st[art] = wert;
+    w.gesetze.unshift({ tag, titel: wKurz(g.titel, 80), text: wKurz(g.text, 240), von: m, vonName: w.profile[m].name, ja, nein, angenommen, art, wert });
+    if (w.gesetze.length > 30) w.gesetze.length = 30;
+    wLog(w, angenommen ? "done" : "warn", "⚖️ Gesetz «" + wKurz(g.titel, 80) + "» " + (angenommen ? "angenommen" : "abgelehnt") + " (" + ja + " : " + nein + ")" +
+      (angenommen && art !== "keine" ? " — " + { steuer: "Steuer", grundeinkommen: "Grundeinkommen", bauzuschuss: "Bauzuschuss" }[art] + " jetzt " + wert : ""), tag);
+  }
+}
+
+function wWahl(w, wahl, idVon) {
+  const ids = wAktive(w), tag = w.tag, st = w.stadt;
+  const kand = {};
+  for (const k of (wahl && Array.isArray(wahl.kandidaten) ? wahl.kandidaten : [])) { const id = k && idVon(k.wer); if (id) kand[id] = wKurz(k.programm, 160); }
+  const stimmen = {};
+  for (const s of (wahl && Array.isArray(wahl.stimmen) ? wahl.stimmen : [])) {
+    const v = s && idVon(s.wer), f = s && idVon(s.fuer);
+    if (v && f) { stimmen[v] = f; if (kand[f] === undefined) kand[f] = ""; }
+  }
+  if (!Object.keys(kand).length)
+    ids.slice().sort((a, b) => w.bewohner[b].charakter.ehrgeiz - w.bewohner[a].charakter.ehrgeiz).slice(0, 2).forEach((id) => { kand[id] = ""; });
+  for (const v of ids) if (!stimmen[v]) {           // wer nicht abgestimmt hat, waehlt nach Sympathie
+    let best = null, bw = -1e9;
+    for (const c of Object.keys(kand)) {
+      const r = w.beziehungen[wKey(v, c)];
+      const sc = (v === c ? 15 : r ? r.wert : 0) + w.bewohner[c].charakter.ehrgeiz / 10 + (wHash(v + c + tag) % 5);
+      if (sc > bw) { bw = sc; best = c; }
+    }
+    stimmen[v] = best;
+  }
+  const n = {};
+  Object.keys(kand).forEach((c) => { n[c] = 0; });
+  ids.forEach((v) => { if (n[stimmen[v]] !== undefined) n[stimmen[v]]++; });
+  const rang = Object.keys(kand).sort((a, b) => n[b] - n[a] || wHash(b + tag) - wHash(a + tag));
+  const sieger = rang[0];
+  st.buergermeister = sieger; st.amtSeit = tag; st.naechsteWahl = tag + 7;
+  w.bewohner[sieger].stimmung = "stolz";
+  w.wahlen.unshift({ tag, gewinner: sieger, gewinnerName: w.profile[sieger].name,
+    kandidaten: rang.map((c) => ({ id: c, name: w.profile[c].name, programm: kand[c], stimmen: n[c] })) });
+  if (w.wahlen.length > 20) w.wahlen.length = 20;
+  wLog(w, "done", "🗳️ Wahl: " + w.profile[sieger].name + " wird Buergermeister (" + rang.map((c) => w.profile[c].name + " " + n[c]).join(", ") + ")." +
+    (kand[sieger] ? " Programm: " + kand[sieger] : ""), tag);
+}
+
+/* ---------- Verkaufspaket einer Firma ---------- */
+function wEsc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function wProduktStandard(f) {
+  const vor = (f.changelog || []).slice(0, 3).map((c) => wKurz(c.text, 110)).filter(Boolean);
+  return { an: false, titel: f.name, claim: wKurz(f.idee, 160),
+           vorteile: vor.length ? vor : ["Sofort einsatzbereit", "Laeuft im Browser, auch am Handy", "Wird laufend weiterentwickelt"],
+           preis: "", kontakt: "", zielgruppe: "" };
+}
+function wProdukt(f) { return Object.assign(wProduktStandard(f), f.produkt || {}); }
+function wPaketHtml(f, appHtml) {
+  const P = wProdukt(f), k = String(P.kontakt || "").trim();
+  const ziel = /^https?:\/\/\S+$/i.test(k) ? k : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(k) ? "mailto:" + k + "?subject=" + encodeURIComponent("Anfrage: " + P.titel) : "";
+  const vor = (P.vorteile || []).slice(0, 6).map((v) => "<li>" + wEsc(v) + "</li>").join("");
+  return `<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${wEsc(P.titel)}</title><meta name="description" content="${wEsc(P.claim)}">
+<style>*{box-sizing:border-box}body{margin:0;font:16px/1.55 system-ui,-apple-system,Segoe UI,sans-serif;background:#0b0b12;color:#ececf4}
+.w{max-width:880px;margin:0 auto;padding:28px 18px 60px}h1{font-size:clamp(28px,7vw,46px);line-height:1.1;margin:8px 0 12px}
+.c{font-size:clamp(17px,4vw,21px);color:#b9b9cc;margin:0 0 20px}.p{display:inline-block;background:#9BFF3D;color:#0b0b12;font-weight:700;padding:6px 14px;border-radius:99px;margin-bottom:22px}
+ul{padding:0;list-style:none;display:grid;gap:10px;margin:0 0 28px}li{background:#15151f;border:1px solid #2a2a3c;border-left:4px solid #FF2D78;padding:12px 14px;border-radius:6px}
+.a{display:inline-block;background:#FF2D78;color:#fff;text-decoration:none;font-weight:700;padding:14px 26px;border-radius:6px;margin:6px 0 26px}
+.k{color:#b9b9cc;margin:0 0 26px}h2{font-size:20px;margin:26px 0 10px}iframe{width:100%;height:560px;border:1px solid #2a2a3c;border-radius:8px;background:#fff}
+.f{margin-top:30px;color:#6d6d85;font-size:13px}</style></head><body><div class="w">
+<div style="color:#22E0FF;font-weight:700;letter-spacing:.06em;text-transform:uppercase;font-size:13px">${wEsc(f.name)}</div>
+<h1>${wEsc(P.titel)}</h1><p class="c">${wEsc(P.claim)}</p>
+${P.preis ? '<div class="p">' + wEsc(P.preis) + "</div>" : ""}
+<ul>${vor}</ul>
+${ziel ? '<a class="a" href="' + wEsc(ziel) + '">Jetzt anfragen</a>' : k ? '<p class="k">Kontakt: ' + wEsc(k) + "</p>" : ""}
+${P.zielgruppe ? '<p class="k">Fuer: ' + wEsc(P.zielgruppe) + "</p>" : ""}
+<h2>Gleich ausprobieren</h2>
+<iframe title="${wEsc(P.titel)}" sandbox="allow-scripts allow-modals allow-downloads" srcdoc="${String(appHtml).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"></iframe>
+<div class="f">${wEsc(f.name)} · Version ${f.version || 1} · entstanden in der Nemesis-Welt</div></div></body></html>`;
+}
+const W_CSP_SEITE = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; " +
+                    "connect-src 'none'; frame-src about:; form-action 'none'; base-uri 'none'";
+async function wProduktTexte(raum, id, grund) {
+  const w = wLaden(raum), f = w.firmen[id];
+  if (!f) throw new Error("Firma nicht gefunden");
+  const funk = (f.changelog || []).slice(0, 6).map((c) => c.text).join(" | ");
+  const erg = await wLlmJson(raum, grund,
+    `Du schreibst fuer eine fertige Software eine kurze, ehrliche Verkaufsseite. Deutsch (Schweiz-tauglich), konkret, ohne Superlative-Kitsch, erfinde keine Funktionen, die die App nicht hat. Antworte NUR mit JSON.
+{"titel": string (max 50 Zeichen), "claim": string (1 Satz, max 140), "vorteile": [3 bis 5 Strings, je max 90 Zeichen], "zielgruppe": string (kurz), "preisvorschlag": string (z.B. "CHF 9 / Monat" oder "CHF 49 einmalig", passend zum Umfang)}`,
+    "Firma: " + f.name + "\nIdee: " + f.idee + (f.app ? "\nArt: " + f.app : "") + "\nVersion " + (f.version || 1) + "\nBisherige Entwicklung: " + (funk || "erste Version"), { max: 900 });
+  const w2 = wLaden(raum), f2 = w2.firmen[id];
+  if (!f2) return;
+  const P = f2.produkt = wProdukt(f2);
+  if (erg.titel) P.titel = wKurz(erg.titel, 60);
+  if (erg.claim) P.claim = wKurz(erg.claim, 160);
+  if (Array.isArray(erg.vorteile) && erg.vorteile.length) P.vorteile = erg.vorteile.slice(0, 5).map((v) => wKurz(v, 100)).filter(Boolean);
+  if (erg.zielgruppe) P.zielgruppe = wKurz(erg.zielgruppe, 100);
+  if (!P.preis && erg.preisvorschlag) P.preis = wKurz(erg.preisvorschlag, 40);
+  wSpeichern(w2);
+}
+function wProduktSpeichern(raum, b) {
+  const w = wLaden(raum), f = w.firmen[String(b.id || "")];
+  if (!f) return null;
+  const P = f.produkt = wProdukt(f);
+  if (typeof b.an === "boolean") P.an = b.an;
+  if (typeof b.preis === "string") P.preis = wKurz(b.preis, 40);
+  if (typeof b.kontakt === "string") P.kontakt = wKurz(b.kontakt, 120);
+  if (typeof b.titel === "string" && b.titel.trim()) P.titel = wKurz(b.titel, 60);
+  if (typeof b.claim === "string" && b.claim.trim()) P.claim = wKurz(b.claim, 160);
+  wSpeichern(w);
+  return w;
+}
+// Aufrufzaehler der oeffentlichen Seiten (eigene kleine Datei, damit die Welt-Datei nicht dauernd beschrieben wird)
+const WV = global.__nxApp.welt.views = global.__nxApp.welt.views || {};
+function wAufruf(raum, id) {
+  const d = WV[raum] = WV[raum] || (function () { try { return JSON.parse(fs.readFileSync(path.join(SYNC_DIR, "_views-" + raum + ".json"), "utf8")); } catch (e) { return { n: {}, t: 0 }; } })();
+  d.n[id] = (d.n[id] || 0) + 1;
+  if (Date.now() - d.t > 20000) {
+    d.t = Date.now();
+    try { fs.mkdirSync(SYNC_DIR, { recursive: true }); fs.writeFileSync(path.join(SYNC_DIR, "_views-" + raum + ".json"), JSON.stringify({ n: d.n })); } catch (e) {}
+  }
+}
+function wAufrufe(raum, id) {
+  const d = WV[raum] || (function () { try { return JSON.parse(fs.readFileSync(path.join(SYNC_DIR, "_views-" + raum + ".json"), "utf8")); } catch (e) { return { n: {} }; } })();
+  return (d.n && d.n[id]) || 0;
+}
+function produktSeite(raum, id, res) {
+  raum = wRaum(raum);
+  const w = wLaden(raum), f = w.firmen[id];
+  const html = f ? wAppLesen(raum, id) : "";
+  if (!f || !html || !wProdukt(f).an) {
+    res.writeHead(404, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+    res.end("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><body style='font:16px system-ui;padding:40px;background:#0b0b12;color:#ccc'>Diese Seite gibt es nicht (mehr).</body>");
+    return true;
+  }
+  wAufruf(raum, id);
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=60", "Content-Security-Policy": W_CSP_SEITE,
+                       "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" });
+  res.end(wPaketHtml(f, html));
+  return true;
+}
+
 /* ---------- Bewohner erschaffen ---------- */
 function wProfilText(p) {
   return p.name + " (" + (p.branche || "—") + " / " + (p.funktion || "—") + ", Erfahrung " + (p.xp || 0) + " XP)" +
@@ -566,7 +879,7 @@ async function wEinbuergern(raum, grund) {
   try {
     erg = await wLlmJson(raum, grund,
       `Du erschaffst fuer jeden Agenten eine Verkoerperung in einer lebendigen Zivilisation. Jeder bekommt ein Aussehen, ein einfaches erstes Zuhause und eine Eigenart, die ihn in der Gemeinschaft ausmacht. Deutsch. Antworte NUR mit JSON.
-{"bewohner": [{"name": string (exakt wie vorgegeben), "emoji": string (EIN passendes Emoji als Gesicht), "aussehen": string (1 Satz), "haus": string (Name der ersten Behausung, z.B. "Bretterbude am Hang"), "eigenart": string (kurz, was ihn sozial ausmacht)}]}`,
+{"bewohner": [{"name": string (exakt wie vorgegeben), "emoji": string (EIN passendes Emoji als Gesicht), "aussehen": string (1 Satz), "haus": string (Name der ersten Behausung, z.B. "Bretterbude am Hang"), "eigenart": string (kurz, was ihn sozial ausmacht), "charakter": {"mut": Zahl 0-100, "neugier": Zahl, "ehrgeiz": Zahl, "guete": Zahl, "humor": Zahl} (passend zu Person und Auftrag, nicht alle gleich), "ziel": string (sein persoenliches Lebensziel in der Welt, 1 Satz)}]}`,
       "Diese Agenten betreten die Welt:\n" + neu.map((id) => wProfilText(w.profile[id])).join("\n"), { max: 1800 });
   } catch (e) { console.warn("[welt] Einbuergern ohne KI-Text: " + e.message); }
   w = wLaden(raum);
@@ -581,7 +894,10 @@ async function wEinbuergern(raum, grund) {
       emoji, aussehen: wKurz(b.aussehen, 200), eigenart: wKurz(b.eigenart, 160) || wKurz(p.notes, 160) || "neugierig",
       farbe: W_FARBEN[wHash(id + "f") % W_FARBEN.length], haus: wKurz(b.haus, 60) || "Zelt am Stadtrand", hausStufe: 1,
       geld: 100, firmaId: null, stimmung: "neugierig", seitTag: w.tag,
+      charakter: wStdCharakter(id), erinnerungen: [], ziel: wKurz(b.ziel, 120),
     };
+    if (b.charakter && typeof b.charakter === "object")
+      for (const k of W_EIGENSCHAFTEN) { const v = Math.round(Number(b.charakter[k])); if (v >= 0 && v <= 100) w.bewohner[id].charakter[k] = v; }
     namen.push(p.name);
   }
   if (namen.length) wLog(w, "done", namen.join(", ") + (namen.length === 1 ? " betritt" : " betreten") + " die Welt.", Math.max(w.tag, 1));
@@ -613,13 +929,16 @@ async function wTagErzaehlen(raum, w, grund) {
     const b = w.bewohner[id], p = w.profile[id], f = b.firmaId && w.firmen[b.firmaId];
     return p.name + " " + b.emoji + " — " + (p.funktion || "Allrounder") + "; wohnt: " + b.haus + " (Stufe " + b.hausStufe + "); Geld: " + b.geld +
       "; Unternehmen: " + (f ? f.name + " (" + f.idee + ", Stufe " + f.stufe + ", App v" + f.version + ")" : "keines") +
-      "; Stimmung: " + b.stimmung + "; Eigenart: " + b.eigenart;
+      "; Stimmung: " + b.stimmung + "; Eigenart: " + b.eigenart + (b.ziel ? "; Ziel: " + b.ziel : "") +
+      (b.charakter ? "; Charakter: " + W_EIGENSCHAFTEN.map((k) => k + " " + b.charakter[k]).join("/") : "");
   }).join("\n");
   const geb = w.gebaeude.filter((g) => g.art !== "firma").slice(-12).map((g) => g.name + " (" + g.art + ")").join(", ") || "noch keine oeffentlichen Gebaeude";
   const bisher = w.chronik.filter((c) => !c.art).slice(0, 4).map((c) => "Tag " + c.tag + ": " + c.text).join("\n") || "Die Welt ist jung.";
+  const ev = wEreignis(raum, w.tag + 1);
+  const ids0 = wAktive(w);
   const system = `Du erzaehlst einen Tag in einer kleinen Zivilisation aus KI-Wesen. Sie leben, reden, spielen, bauen Haeuser, Kirchen, Laeden und andere Gebaeude und gruenden Unternehmen. Jedes Unternehmen entwickelt eine echte Software (App), an der die Firma jeden Tag weiterbaut. Lass echte Dinge passieren, konkret und lebendig, kein Kitsch. Deutsch.
 
-Regeln (der Server prueft sie): Geld-Aenderung pro Bewohner zwischen -60 und +180. Kosten: Hausausbau (art "haus") 150; Unternehmen gruenden 120 (nur wer noch keines hat); Gebaeude: kirche 300, laden 180, werkstatt 160, schule 280, park 100, buero 140, labor 250, cafe 170, bibliothek 220, halle 400, bank 350, markt 200. Wer zu wenig Geld hat, kann nicht bauen. Gruende ein Unternehmen nur mit einer konkreten, nuetzlichen App-Idee (z.B. Terminplaner, Rechnungsprogramm, Lern-App, Kassensystem, Inventar, Habit-Tracker, Spiel). Nicht jeder muss jeden Tag etwas bauen.
+Regeln (der Server prueft sie): Geld-Aenderung pro Bewohner zwischen -60 und +180. Kosten: Hausausbau (art "haus") 150; Unternehmen gruenden 120 (nur wer noch keines hat); Gebaeude: kirche 300, laden 180, werkstatt 160, schule 280, park 100, buero 140, labor 250, cafe 170, bibliothek 220, halle 400, bank 350, markt 200. Wer zu wenig Geld hat, kann nicht bauen. Gruende ein Unternehmen nur mit einer konkreten, nuetzlichen App-Idee (z.B. Terminplaner, Rechnungsprogramm, Lern-App, Kassensystem, Inventar, Habit-Tracker, Spiel). Nicht jeder muss jeden Tag etwas bauen. Es gibt eine Stadtverwaltung mit Buergermeister, Steuern und Stadtkasse (siehe STADT): beruecksichtige sie. Firmen handeln miteinander (Leistung gegen Taler, Preis 5-120); der Kaeufer braucht genug Geld. Zufallsereignis des Tages siehe LAGE.
 
 Antworte NUR mit JSON.
 {"erzaehlung": string (3-4 Saetze: der Tag als Ganzes),
@@ -627,10 +946,12 @@ Antworte NUR mit JSON.
    "bauen": {"art": string, "name": string, "beschreibung": string} oder null,
    "firmaNeu": {"name": string, "idee": string (1 Satz: welche App), "app": string (Art der Software)} oder null,
    "firmaWachstum": boolean}],
+ "handel": [{"kaeufer": string (exakter Name), "verkaeufer": string (exakter Name), "ware": string (z.B. "Lizenz fuer Terminplaner"), "preis": number 5-120}] (0 bis 3 Geschaefte zwischen Bewohnern, gern Firma an Firma),
  "gespraech": {"zeilen": [string] (3-4 Wortwechsel, jeweils "Name: Text")},
  "spiel": string (welches Spiel gespielt wurde und wer gewann, 1 Satz)}`;
   return await wLlmJson(raum, grund, system,
-    "TAG " + (w.tag + 1) + " in der Welt.\n\nBEWOHNER:\n" + stand + "\n\nGEBAEUDE DER STADT: " + geb + "\n\nWAS BISHER GESCHAH:\n" + bisher, { max: 2800 });
+    "TAG " + (w.tag + 1) + " in der Welt.\nLAGE: " + ev.text + "\n\nBEWOHNER:\n" + stand + "\n\nSTADT: " + wStadtText(w) + "\n\nBEZIEHUNGEN:\n" + wBezText(w, ids0) +
+      "\n\nGEBAEUDE DER STADT: " + geb + "\n\nWAS BISHER GESCHAH:\n" + bisher, { max: 3200 });
 }
 
 function wTagAnwenden(w, erg) {
@@ -639,6 +960,13 @@ function wTagAnwenden(w, erg) {
   const namen = {};
   for (const id of wAktive(w)) namen[String(w.profile[id].name).trim().toLowerCase()] = id;
   const heute = [];
+  const ev = wEreignis(w.raum, tag), st = w.stadt;
+  if (ev.id !== "ruhig") wLog(w, "warn", (ev.id === "boom" ? "📈 " : ev.id === "flaute" ? "📉 " : ev.id === "sturm" ? "⛈️ " : ev.id === "markt" ? "🧺 " : "🎉 ") + ev.text, tag);
+  const kostenVon = (basis) => {
+    const k = Math.round(basis * ev.bau);
+    const z = Math.min(st.kasse, Math.round(k * (st.bauzuschuss || 0) / 100));
+    return { kosten: k - z, zuschuss: z };
+  };
   const liste = Array.isArray(erg.ereignisse) ? erg.ereignisse.slice(0, 30) : [];
   for (const e of liste) {
     if (!e || typeof e !== "object") continue;
@@ -651,13 +979,14 @@ function wTagAnwenden(w, erg) {
     const bau = e.bauen && typeof e.bauen === "object" && e.bauen.art ? e.bauen : null;
     if (bau) {
       const art = wArt(bau.art);
-      if (art === "haus" && b.geld >= W_HAUS) {
-        b.geld -= W_HAUS; b.hausStufe = (b.hausStufe || 1) + 1;
+      const kv = art ? kostenVon(art === "haus" ? W_HAUS : W_KOSTEN[art]) : null;
+      if (art === "haus" && b.geld >= kv.kosten) {
+        b.geld -= kv.kosten; st.kasse -= kv.zuschuss; b.hausStufe = (b.hausStufe || 1) + 1;
         if (bau.name) b.haus = wKurz(bau.name, 60);
         notiz.push("baut sein Haus aus: " + b.haus);
         wLog(w, "done", "🏠 " + p.name + " baut das Haus aus: " + b.haus + " (Stufe " + b.hausStufe + ")", tag);
-      } else if (art && art !== "haus" && b.geld >= W_KOSTEN[art] && w.gebaeude.length < 90) {
-        b.geld -= W_KOSTEN[art];
+      } else if (art && art !== "haus" && b.geld >= kv.kosten && w.gebaeude.length < 90) {
+        b.geld -= kv.kosten; st.kasse -= kv.zuschuss;
         const g = { id: "g" + (w.zaehlerG = (w.zaehlerG || 0) + 1), art, name: wKurz(bau.name, 60) || (art[0].toUpperCase() + art.slice(1)),
                     besitzer: id, tag, beschreibung: wKurz(bau.beschreibung, 200) };
         w.gebaeude.push(g);
@@ -682,15 +1011,48 @@ function wTagAnwenden(w, erg) {
     }
     heute.push({ wer: p.name, emoji: b.emoji, tat: wKurz(e.tat, 220), geld: Math.round(Number(e.geld) || 0), notiz: notiz.join("; ") });
   }
-  // Firmen mit Software verdienen jeden Tag
+  // Handel zwischen Bewohnern und Firmen
+  const idVon = wNamenIds(w);
+  let tagesUmsatz = 0;
+  const handelHeute = [];
+  for (const h of (Array.isArray(erg.handel) ? erg.handel.slice(0, 4) : [])) {
+    if (!h || typeof h !== "object") continue;
+    const k = idVon(h.kaeufer), v = idVon(h.verkaeufer);
+    if (!k || !v || k === v) continue;
+    const preis = Math.max(1, Math.min(120, Math.round(Number(h.preis) || 0)));
+    if (!(preis >= 1) || w.bewohner[k].geld < preis) continue;
+    w.bewohner[k].geld -= preis; w.bewohner[v].geld += preis;
+    const fv = w.bewohner[v].firmaId && w.firmen[w.bewohner[v].firmaId];
+    if (fv) { fv.umsatz = (fv.umsatz || 0) + preis; fv.handel = (fv.handel || 0) + 1; }
+    const eintrag = { tag, kaeufer: k, kaeuferName: w.profile[k].name, verkaeufer: v, verkaeuferName: w.profile[v].name,
+                      ware: wKurz(h.ware, 80) || "Dienstleistung", preis, firmaId: fv ? fv.id : null };
+    w.handel.unshift(eintrag); handelHeute.push(eintrag);
+    wBez(w, k, v, 3, null, "Handel");
+    tagesUmsatz += preis;
+    wLog(w, "done", "💱 " + eintrag.kaeuferName + " kauft bei " + (fv ? fv.name : eintrag.verkaeuferName) + ": " + eintrag.ware + " (" + preis + " Taler)", tag);
+  }
+  if (w.handel.length > 80) w.handel.length = 80;
+  // Firmen mit Software verdienen jeden Tag, die Stadt kassiert Steuern
   for (const f of Object.values(w.firmen)) {
     const b = w.bewohner[f.gruender];
-    if (b && w.zugelassen[f.gruender]) b.geld += 8 * Math.min(f.stufe || 1, 6) + (f.version > 0 ? 6 : 0);
+    if (!(b && w.zugelassen[f.gruender])) continue;
+    const brutto = Math.round((8 * Math.min(f.stufe || 1, 6) + (f.version > 0 ? 6 : 0)) * ev.mult);
+    const steuer = Math.round(brutto * (st.steuer || 0) / 100);
+    b.geld += brutto - steuer; st.kasse += steuer;
+    f.umsatz = (f.umsatz || 0) + brutto; f.umsatzHeute = brutto; tagesUmsatz += brutto;
   }
+  const aktiveJetzt = wAktive(w);
+  if ((st.grundeinkommen || 0) > 0) for (const id of aktiveJetzt) { if (st.kasse < st.grundeinkommen) break; st.kasse -= st.grundeinkommen; w.bewohner[id].geld += st.grundeinkommen; }
+  const bm = wBuergermeister(w);
+  if (bm && st.kasse >= 8) { st.kasse -= 8; w.bewohner[bm].geld += 8; }
+  if (ev.id === "fest") for (const id of aktiveJetzt) w.bewohner[id].stimmung = "feierlaune";
+  w.wirtschaft.umsatz = (w.wirtschaft.umsatz || 0) + tagesUmsatz;
+  w.wirtschaft.verlauf.push({ tag, umsatz: tagesUmsatz, geld: aktiveJetzt.reduce((s2, id) => s2 + (w.bewohner[id].geld || 0), 0), kasse: st.kasse });
+  if (w.wirtschaft.verlauf.length > 60) w.wirtschaft.verlauf.splice(0, w.wirtschaft.verlauf.length - 60);
   const g = erg.gespraech && Array.isArray(erg.gespraech.zeilen) ? erg.gespraech.zeilen.slice(0, 6).map((z) => wKurz(z, 240)) : [];
   if (erg.spiel) wLog(w, "warn", "Spiel: " + wKurz(erg.spiel, 240), tag);
   wLog(w, "", wKurz(erg.erzaehlung, 900) || "Ein ruhiger Tag.", tag);
-  w.letzterTag = { tag, erzaehlung: wKurz(erg.erzaehlung, 900), gespraech: g, spiel: wKurz(erg.spiel, 240), ereignisse: heute };
+  w.letzterTag = { tag, erzaehlung: wKurz(erg.erzaehlung, 900), gespraech: g, spiel: wKurz(erg.spiel, 240), ereignisse: heute, lage: ev.text, handel: handelHeute };
 }
 
 /* ---------- Software der Firmen ---------- */
@@ -799,6 +1161,8 @@ async function wTag(raum, grund) {
     wSichern(raum);
     wTagAnwenden(w, erg);
     wSpeichern(w);
+    WJ[raum].was = "Beziehungen, Wahlen und Gesetze";
+    try { await wGesellschaft(raum, grund); } catch (e) { console.warn("[welt] Gesellschaft: " + e.message); }
     WJ[raum].was = "Firmen bauen ihre Software";
     await wBaueFirmen(raum, grund);
     w = wLaden(raum); wFenster(w);
@@ -849,11 +1213,18 @@ async function weltUhr() {
 function wAnsicht(raum) {
   const w = wLaden(raum); wFenster(w);
   const firmen = {};
-  for (const id of Object.keys(w.firmen)) firmen[id] = Object.assign({}, w.firmen[id], { verwaist: !w.zugelassen[w.firmen[id].gruender] });
+  for (const id of Object.keys(w.firmen)) firmen[id] = Object.assign({}, w.firmen[id], { verwaist: !w.zugelassen[w.firmen[id].gruender],
+    wert: wFirmenwert(w.firmen[id]), produkt: wProdukt(w.firmen[id]), aufrufe: wAufrufe(w.raum, id) });
+  const aktiv = new Set(wAktive(w));
+  const bez = Object.values(w.beziehungen).filter((r) => aktiv.has(r.a) && aktiv.has(r.b) && Math.abs(r.wert) >= 5)
+    .sort((x, y) => Math.abs(y.wert) - Math.abs(x.wert)).slice(0, 60);
   return {
     ok: true, raum: w.raum, tag: w.tag, serverZeit: Date.now(), autopilot: w.autopilot, zugelassen: w.zugelassen,
     profile: w.profile, bewohner: w.bewohner, gebaeude: w.gebaeude, firmen, chronik: w.chronik.slice(0, 40),
     letzterTag: w.letzterTag, verbrauch: w.verbrauch, naechsterLauf: w.naechsterLauf, pauseBis: w.pauseBis || 0,
+    stadt: Object.assign({}, w.stadt, { buergermeisterAktiv: wBuergermeister(w) }), gesetze: w.gesetze.slice(0, 12), wahlen: w.wahlen.slice(0, 5),
+    handel: w.handel.slice(0, 30), beziehungen: bez, wirtschaft: { umsatz: w.wirtschaft.umsatz || 0, verlauf: w.wirtschaft.verlauf.slice(-30) },
+    lage: wEreignis(w.raum, w.tag),
     letzterFehler: w.letzterFehler, laeuft: WJ[w.raum] ? { was: WJ[w.raum].was, seit: WJ[w.raum].seit } : null,
     neu: !w.tag && !Object.keys(w.bewohner).length && !Object.keys(w.zugelassen).length,
   };
@@ -963,6 +1334,23 @@ async function weltRouten(p, req, res, url, CORS) {
       if (!wJobStarten(raum, "Software: " + nameF, () => wFirmaBauen(raum, fid, "hand"))) { json(res, 200, Object.assign(wAnsicht(raum), { msg: "laeuft schon" }), CORS); return true; }
     }
     json(res, 200, wAnsicht(raum), CORS); return true;
+  }
+  if (p === "/welt/firma/produkt" && POST) {
+    const b = (await lesBody()) || {};
+    const fid2 = String(b.id || "");
+    if (!/^[a-z0-9][a-z0-9-]{1,60}$/.test(fid2)) { json(res, 404, { error: "Firma nicht gefunden" }, CORS); return true; }
+    const w = wProduktSpeichern(raum, Object.assign({}, b, { id: fid2 }));
+    if (!w) { json(res, 404, { error: "Firma nicht gefunden" }, CORS); return true; }
+    if (b.texte && !wJobStarten(raum, "Verkaufstext: " + w.firmen[fid2].name, () => wProduktTexte(raum, fid2, "hand"))) {
+      json(res, 200, Object.assign(wAnsicht(raum), { msg: "laeuft schon" }), CORS); return true;
+    }
+    json(res, 200, wAnsicht(raum), CORS); return true;
+  }
+  if (p === "/welt/firma/paket" && !POST) {
+    const w = wLaden(raum), html = idOk ? wAppLesen(raum, fid) : "";
+    if (!idOk || !w.firmen[fid] || !html) { json(res, 404, { error: "Noch keine Software vorhanden" }, CORS); return true; }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Disposition": 'attachment; filename="' + fid + '-verkaufsseite.html"', "Cache-Control": "no-store", ...CORS });
+    res.end(wPaketHtml(w.firmen[fid], html)); return true;
   }
   if (p === "/welt/export" && !POST) {
     const w = wLaden(raum), apps = {};
@@ -1131,7 +1519,7 @@ async function frageClaude(agent, messages) {
 }
 
 /* ---------- Anmelden: die neueste geladene Version uebernimmt ---------- */
-const KERN = { behandle, rotiere, aufgabe, update, weltUhr, _intern: { ANBIETER, WAHL, HAND, listen, pause, welt: { wTag, wZulassen, wAnsicht, wEinstellungen, wLaden, wSpeichern, wFirmaBauen, WJ } } };
+const KERN = { behandle, rotiere, aufgabe, update, weltUhr, _intern: { ANBIETER, WAHL, HAND, listen, pause, welt: { wTag, wZulassen, wAnsicht, wEinstellungen, wLaden, wSpeichern, wFirmaBauen, wGesellschaft, wProduktTexte, wPaketHtml, wProdukt, wBez, WJ } } };
 global.__nxApp = global.__nxApp || {};
 global.__nxApp.kern = KERN;
 global.__nxApp.version = VERSION;
