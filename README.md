@@ -40,3 +40,10 @@ Kosten-Bremsen: max. Tage und KI-Aufrufe pro 24 Std, optional nur Gratis-Modelle
 - **Karte:** Stadtplan mit Zeitraffer (Tab «Karte»).
 - **Firma → Produkt:** «Als Produkt anbieten» erzeugt eine öffentliche Verkaufsseite `/p/<raum>/<firma>` mit Live-Demo, Preis, Kontakt, Einbett-Code und Datei-Download.
 - **3D-Welt (Tab «3D»):** begehbare Stadt im Browser (Three.js). Kreis links = gehen, Wischen = umschauen, Figuren/Häuser/Firmen antippen. Mit Bewohnern reden: Antworten kommen im Charakter der Figur, mit ihren Erinnerungen (`/welt/sprechen`).
+
+## Betrieb: Agenten, die für den Kunden arbeiten
+In der App bei Agent → Kunde ⭐ → «Betrieb für diesen Kunden anlegen» (Restaurant, Shop, Dienstleister). Danach gibt es pro Kunde:
+- **Besitzer-Bereich** `/b/<id>/#t=<geheimer Token>` (Handy): Agent-Chat, Daten (Lager, Reservierungen, Bestellungen, Kontakte, Aufgaben …), Posteingang, Einstellungen, optional Telegram-Meldungen.
+- **Gast-Chat** `/b/<id>/chat` und `/b/<id>/embed.js` (eine Zeile für die Website): Gäste fragen, reservieren, bestellen. Gäste sehen nie Lager, Einkaufspreise oder fremde Daten.
+- **Werkzeuge des Agenten** (serverseitig, mit Rechteprüfung): lesen, rechnen (exakt), schreiben, ändern, löschen, Tabellen anlegen, Reservierung prüfen (Kapazität), benachrichtigen.
+Daten liegen in `sync-data/_betrieb-<id>.json`. Seiten-Quellen: `app/betrieb-seiten/`, eingebettet mit `python3 build/einbetten.py` (läuft in `build.sh`).

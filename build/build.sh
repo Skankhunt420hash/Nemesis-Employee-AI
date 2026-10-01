@@ -2,6 +2,7 @@
 # Baut install-app.sh aus der Vorlage + app/ Dateien. Aufruf: bash build/build.sh
 set -e
 cd "$(dirname "$0")/.."
+python3 build/einbetten.py
 node --check app/nemesis-app.js
 python3 - <<'PY'
 import base64

@@ -16,7 +16,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DIR = __dirname;
-const VERSION = "2026-09-30.1";
+const VERSION = "2026-10-01.1";
 const APP_DATEI = path.join(DIR, "nemesis-app.html");
 
 /* ---------- Schluessel: aus Umgebung, sonst aus .env daneben ---------- */
@@ -368,7 +368,7 @@ const ICON = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect 
 
 /* ---------- Zweites Schloss ---------- */
 const OEFFENTLICH = [/^\/$/, /^\/health$/, /^\/embed\.js$/, /^\/api\/chat$/, /^\/api\/agent\/[^/]+$/,
-                     /^\/a\/[^/]+\/?$/, /^\/p\/[a-z0-9_-]+\/[a-z0-9-]+\/?$/, /^\/favicon\.ico$/, /^\/robots\.txt$/];
+                     /^\/a\/[^/]+\/?$/, /^\/b\/[a-z0-9][a-z0-9-]{2,40}(\/.*)?$/, /^\/p\/[a-z0-9_-]+\/[a-z0-9-]+\/?$/, /^\/favicon\.ico$/, /^\/robots\.txt$/];
 function vonAussen(req) {
   const h = req.headers || {};
   if (h["x-forwarded-for"] || h["x-real-ip"] || h["x-forwarded-proto"] || h["forwarded"]) return true;
@@ -391,7 +391,12 @@ async function behandle(req, res, url, CORS) {
   }
   const pm = p.match(/^\/p\/([a-z0-9_-]{1,40})\/([a-z0-9][a-z0-9-]{1,60})\/?$/);
   if (pm && (req.method === "GET" || req.method === "HEAD")) return produktSeite(pm[1], pm[2], res);
-  const unsere = p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status" || p === "/update"
+  if (/^\/b\/[a-z0-9]/.test(p)) {
+    if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
+    try { return await betriebOeffentlich(p, req, res, url, CORS); }
+    catch (e) { console.warn("[betrieb] " + e.message); json(res, 500, { error: "Fehler" }, {}); return true; }
+  }
+  const unsere = p.startsWith("/betrieb/") || p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status" || p === "/update"
               || p === "/manifest.webmanifest" || p === "/icon.svg" || p === "/welt" || p.startsWith("/welt/");
   if (!unsere) return false;
 
@@ -418,6 +423,11 @@ async function behandle(req, res, url, CORS) {
     res.end(ICON); return true;
   }
 
+  if (p.startsWith("/betrieb/")) {
+    if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
+    try { return await betriebIntern(p, req, res, url, CORS); }
+    catch (e) { console.warn("[betrieb] " + e.message); json(res, 500, { error: "Betrieb-Fehler: " + e.message }, CORS); return true; }
+  }
   if (p === "/welt" || p.startsWith("/welt/")) {
     if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
     try { return await weltRouten(p, req, res, url, CORS); }
@@ -1414,6 +1424,529 @@ async function weltRouten(p, req, res, url, CORS) {
 }
 
 /* ===========================================================
+   BETRIEB  ·  Werkzeuge fuer Kunden-Agenten
+   Jeder Kunde (Restaurant, Shop, Dienstleister ...) bekommt einen eigenen
+   Betrieb auf dem Server: Tabellen (Lager, Reservierungen, Bestellungen ...),
+   einen Besitzer-Bereich und einen Gast-Chat. Der Agent liest, rechnet und
+   schreibt ueber Werkzeuge. Daten liegen in sync-data/_betrieb-<id>.json.
+   =========================================================== */
+const crypto = require("crypto");
+const B_S = (k, l, t) => ({ k, l, t: t || "text" });
+const B_TAB = (name, label, spalten, opt) => Object.assign({ name, label, spalten, zeilen: [], zaehler: 0 }, opt || {});
+
+function bVorlage(art) {
+  const anfragen = () => B_TAB("anfragen", "Anfragen", [B_S("name", "Name"), B_S("kontakt", "Telefon oder E-Mail"), B_S("nachricht", "Nachricht"), B_S("status", "Status (neu/erledigt)")], { schreibenOeffentlich: true });
+  const aufgaben = () => B_TAB("aufgaben", "Aufgaben", [B_S("titel", "Aufgabe"), B_S("faellig", "Faellig", "datum"), B_S("status", "Status (offen/erledigt)"), B_S("notiz", "Notiz")]);
+  const kontakte = () => B_TAB("kontakte", "Kontakte", [B_S("name", "Name"), B_S("telefon", "Telefon"), B_S("email", "E-Mail"), B_S("notiz", "Notiz")]);
+  const einst = { name: "", oeffnungszeiten: "", adresse: "", telefon: "", regeln: "", kapazitaet: 40, dauer_min: 120, auto_bestaetigen: true, telegramToken: "", telegramChat: "" };
+  if (art === "shop") {
+    return { einstellungen: einst, tabellen: [
+      B_TAB("produkte", "Produkte", [B_S("name", "Name"), B_S("sku", "Artikelnr."), B_S("kategorie", "Kategorie"), B_S("preis", "Preis", "zahl"), B_S("beschreibung", "Beschreibung"), B_S("verfuegbar", "Verfuegbar (ja/nein)")], { oeffentlich: true }),
+      B_TAB("lager", "Lager", [B_S("name", "Artikel"), B_S("sku", "Artikelnr."), B_S("menge", "Menge", "zahl"), B_S("min", "Mindestmenge", "zahl"), B_S("einkaufspreis", "Einkaufspreis", "zahl"), B_S("lieferant", "Lieferant"), B_S("notiz", "Notiz")]),
+      B_TAB("bestellungen", "Bestellungen", [B_S("kunde", "Kunde"), B_S("kontakt", "Kontakt"), B_S("positionen", "Positionen"), B_S("summe", "Summe", "zahl"), B_S("status", "Status (neu/versendet/erledigt)"), B_S("notiz", "Notiz")], { schreibenOeffentlich: true }),
+      B_TAB("retouren", "Retouren", [B_S("bestellung", "Bestellung"), B_S("grund", "Grund"), B_S("status", "Status (neu/genehmigt/abgelehnt)")], { schreibenOeffentlich: true }),
+      kontakte(), aufgaben(), anfragen()] };
+  }
+  if (art === "dienstleister") {
+    return { einstellungen: Object.assign({}, einst, { kapazitaet: 4, dauer_min: 60 }), tabellen: [
+      B_TAB("leistungen", "Leistungen", [B_S("name", "Leistung"), B_S("dauer_min", "Dauer (Min)", "zahl"), B_S("preis", "Preis", "zahl"), B_S("beschreibung", "Beschreibung")], { oeffentlich: true }),
+      B_TAB("termine", "Termine", [B_S("name", "Name"), B_S("telefon", "Telefon"), B_S("leistung", "Leistung"), B_S("datum", "Datum", "datum"), B_S("zeit", "Zeit", "zeit"), B_S("personen", "Personen", "zahl"), B_S("notiz", "Notiz"), B_S("status", "Status (neu/bestaetigt/abgesagt)")], { schreibenOeffentlich: true }),
+      B_TAB("rechnungen", "Rechnungen", [B_S("kunde", "Kunde"), B_S("betrag", "Betrag", "zahl"), B_S("datum", "Datum", "datum"), B_S("status", "Status (offen/bezahlt)")]),
+      kontakte(), aufgaben(), anfragen()] };
+  }
+  return { einstellungen: einst, tabellen: [
+    B_TAB("speisekarte", "Speisekarte", [B_S("name", "Gericht"), B_S("kategorie", "Kategorie"), B_S("preis", "Preis", "zahl"), B_S("beschreibung", "Beschreibung"), B_S("allergene", "Allergene"), B_S("verfuegbar", "Verfuegbar (ja/nein)")], { oeffentlich: true }),
+    B_TAB("lager", "Lager", [B_S("name", "Artikel"), B_S("menge", "Menge", "zahl"), B_S("einheit", "Einheit"), B_S("min", "Mindestmenge", "zahl"), B_S("einkaufspreis", "Einkaufspreis je Einheit", "zahl"), B_S("lieferant", "Lieferant"), B_S("haltbar_bis", "Haltbar bis", "datum"), B_S("notiz", "Notiz")]),
+    B_TAB("reservierungen", "Reservierungen", [B_S("name", "Name"), B_S("telefon", "Telefon"), B_S("personen", "Personen", "zahl"), B_S("datum", "Datum", "datum"), B_S("zeit", "Zeit", "zeit"), B_S("notiz", "Notiz"), B_S("status", "Status (neu/bestaetigt/abgesagt/erschienen)")], { schreibenOeffentlich: true }),
+    B_TAB("bestellungen", "Bestellungen", [B_S("kunde", "Kunde"), B_S("kontakt", "Kontakt"), B_S("positionen", "Positionen"), B_S("summe", "Summe", "zahl"), B_S("art", "Art (abholung/lieferung/tisch)"), B_S("status", "Status (neu/in Arbeit/fertig/erledigt)"), B_S("notiz", "Notiz")], { schreibenOeffentlich: true }),
+    kontakte(), aufgaben(), anfragen()] };
+}
+function bDemo(art) {
+  if (art === "shop") return { produkte: [{ name: "Ledergurt braun", sku: "G-100", kategorie: "Accessoires", preis: 49, verfuegbar: "ja" }, { name: "Rucksack Canvas", sku: "R-200", kategorie: "Taschen", preis: 89, verfuegbar: "ja" }],
+    lager: [{ name: "Ledergurt braun", sku: "G-100", menge: 3, min: 10, einkaufspreis: 21, lieferant: "Lederwerk AG" }, { name: "Rucksack Canvas", sku: "R-200", menge: 24, min: 8, einkaufspreis: 38, lieferant: "Textil GmbH" }] };
+  if (art === "dienstleister") return { leistungen: [{ name: "Beratung", dauer_min: 60, preis: 120 }, { name: "Kurztermin", dauer_min: 30, preis: 60 }] };
+  return { speisekarte: [{ name: "Rösti mit Spiegelei", kategorie: "Hauptgang", preis: 19.5, allergene: "Ei", verfuegbar: "ja" }, { name: "Zürcher Geschnetzeltes", kategorie: "Hauptgang", preis: 34, allergene: "Milch", verfuegbar: "ja" }, { name: "Tiramisu", kategorie: "Dessert", preis: 9.5, allergene: "Ei, Milch", verfuegbar: "ja" }],
+    lager: [{ name: "Kartoffeln", menge: 12, einheit: "kg", min: 20, einkaufspreis: 1.4, lieferant: "Bauernhof Meier" }, { name: "Kalbfleisch", menge: 4, einheit: "kg", min: 5, einkaufspreis: 32, lieferant: "Metzgerei Huber" }, { name: "Eier", menge: 60, einheit: "Stk", min: 30, einkaufspreis: 0.4, lieferant: "Bauernhof Meier" }, { name: "Rahm", menge: 2, einheit: "l", min: 6, einkaufspreis: 4.2, lieferant: "Molkerei Alpina" }] };
+}
+
+function bLaden(id) { if (!/^[a-z0-9][a-z0-9-]{2,40}$/.test(String(id))) return null; try { return JSON.parse(fs.readFileSync(path.join(SYNC_DIR, "_betrieb-" + id + ".json"), "utf8")); } catch (e) { return null; } }
+function bSpeichern(b) {
+  fs.mkdirSync(SYNC_DIR, { recursive: true });
+  const f = path.join(SYNC_DIR, "_betrieb-" + b.id + ".json");
+  fs.writeFileSync(f + ".tmp", JSON.stringify(b)); fs.renameSync(f + ".tmp", f);
+}
+function bListe() {
+  let d = []; try { d = fs.readdirSync(SYNC_DIR).filter((f) => /^_betrieb-[a-z0-9-]+\.json$/.test(f)); } catch (e) {}
+  return d.map((f) => bLaden(f.slice(9, -5))).filter(Boolean);
+}
+function bNeu(o) {
+  const name = wKurz(o.name, 80) || "Mein Betrieb";
+  let basis = name.toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30);
+  if (basis.length < 3) basis = "betrieb-" + basis;
+  let id = basis, n = 2; while (bLaden(id)) id = basis + "-" + n++;
+  const art = ["restaurant", "shop", "dienstleister"].includes(o.preset) ? o.preset : "restaurant";
+  const v = bVorlage(art);
+  const t = {}; v.tabellen.forEach((x) => { t[x.name] = x; });
+  v.einstellungen.name = name;
+  const b = { id, token: crypto.randomBytes(16).toString("hex"), name, preset: art, erstellt: new Date().toISOString(),
+              agentName: wKurz(o.agentName, 60) || "Assistent", prompt: String(o.prompt || "").slice(0, 20000), greeting: wKurz(o.greeting, 300) || "Grüezi! Wie kann ich helfen?",
+              farbe: /^#[0-9a-f]{6}$/i.test(o.farbe || "") ? o.farbe : "#1f2937", tabellen: t, einstellungen: v.einstellungen, inbox: [], gespraeche: [], zaehler: { tag: "", oeffentlich: 0 } };
+  bSpeichern(b);
+  return b;
+}
+function bJetzt() {
+  const s = new Date().toLocaleString("sv-SE", { timeZone: "Europe/Zurich" });
+  return { datum: s.slice(0, 10), zeit: s.slice(11, 16), wochentag: new Date().toLocaleDateString("de-CH", { weekday: "long", timeZone: "Europe/Zurich" }) };
+}
+function bTokenOk(b, t) {
+  const a = Buffer.from(String(t || "")), c = Buffer.from(String(b.token));
+  return a.length === c.length && crypto.timingSafeEqual(a, c);
+}
+function bInbox(b, art, text) {
+  b.inbox.unshift({ id: "m" + Date.now().toString(36) + Math.floor(Math.random() * 1e3), zeit: new Date().toISOString(), art, text: wKurz(text, 400), gelesen: false });
+  if (b.inbox.length > 200) b.inbox.length = 200;
+  const e = b.einstellungen;
+  if (e.telegramToken && e.telegramChat) {
+    fetch("https://api.telegram.org/bot" + encodeURIComponent(e.telegramToken) + "/sendMessage", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: e.telegramChat, text: "[" + b.name + "] " + wKurz(text, 400) }) }).catch(() => {});
+  }
+}
+
+/* ---------- Werte, Filter, Rechnen ---------- */
+function bWert(s, t) {
+  if (s.t === "zahl") { const n = Number(String(t == null ? "" : t).replace(",", ".").replace(/[^\d.\-]/g, "")); if (!/\d/.test(String(t == null ? "" : t)) || !Number.isFinite(n)) throw new Error("«" + s.k + "» muss eine Zahl sein"); return n; }
+  if (s.t === "datum") {
+    const x = String(t || "").trim(); let m;
+    if ((m = x.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))) return m[1] + "-" + m[2].padStart(2, "0") + "-" + m[3].padStart(2, "0");
+    if ((m = x.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/))) return (m[3].length === 2 ? "20" + m[3] : m[3]) + "-" + m[2].padStart(2, "0") + "-" + m[1].padStart(2, "0");
+    if (!x) return ""; throw new Error("«" + s.k + "» braucht ein Datum (JJJJ-MM-TT)");
+  }
+  if (s.t === "zeit") {
+    const x = String(t || "").trim().replace(".", ":"); const m = x.match(/^(\d{1,2}):?(\d{2})?$/);
+    if (!x) return ""; if (!m || +m[1] > 23) throw new Error("«" + s.k + "» braucht eine Uhrzeit (HH:MM)");
+    return m[1].padStart(2, "0") + ":" + (m[2] || "00");
+  }
+  return wKurz(t, 400);
+}
+function bCols(t, felder, partiell) {
+  const z = {};
+  for (const s of t.spalten) {
+    if (felder[s.k] === undefined || felder[s.k] === null || felder[s.k] === "") { if (!partiell) z[s.k] = s.t === "zahl" ? "" : ""; continue; }
+    z[s.k] = bWert(s, felder[s.k]);
+  }
+  for (const k of Object.keys(felder)) if (!t.spalten.some((s) => s.k === k) && k !== "id") throw new Error("Unbekannte Spalte «" + k + "» in " + t.name + ". Spalten: " + t.spalten.map((s) => s.k).join(", "));
+  return z;
+}
+function bFilter(t, filter, heute) {
+  const fl = (Array.isArray(filter) ? filter : filter && typeof filter === "object" ? [filter] : []).slice(0, 6);
+  for (const f of fl) if (!f || (f.spalte !== "id" && !t.spalten.some((s) => s.k === f.spalte))) throw new Error("Filter: Spalte «" + (f && f.spalte) + "» gibt es nicht in " + t.name + ". Spalten: " + t.spalten.map((s) => s.k).join(", "));
+  return t.zeilen.filter((z) => fl.every((f) => {
+    const a = z[f.spalte], op = String(f.op || "=");
+    let v = f.wert; if (v === "heute") v = heute; else if (typeof v === "string" && v[0] === "@" && t.spalten.some((s) => s.k === v.slice(1))) v = z[v.slice(1)];
+    if (op === "leer") return a === "" || a == null;
+    if (op === "nichtleer") return !(a === "" || a == null);
+    const an = Number(a), vn = Number(v), num = a !== "" && a != null && v !== "" && v != null && Number.isFinite(an) && Number.isFinite(vn);
+    const x = num ? an : String(a == null ? "" : a).toLowerCase(), y = num ? vn : String(v == null ? "" : v).toLowerCase();
+    if (op === "enthaelt") return String(x).includes(String(y));
+    if (op === "=" || op === "==") return x === y;
+    if (op === "!=") return x !== y;
+    if (op === "<") return x < y; if (op === "<=") return x <= y; if (op === ">") return x > y; if (op === ">=") return x >= y;
+    throw new Error("Unbekannter Vergleich «" + op + "». Erlaubt: = != < <= > >= enthaelt leer nichtleer");
+  }));
+}
+function bBelegung(b, datum, zeit) {
+  const t = b.tabellen.reservierungen || b.tabellen.termine; const e = b.einstellungen;
+  const kap = Number(e.kapazitaet) || 0, dauer = Number(e.dauer_min) || 120;
+  const min = (z) => { const m = String(z || "").match(/^(\d{2}):(\d{2})$/); return m ? +m[1] * 60 + +m[2] : null; };
+  const zm = min(zeit); let belegt = 0;
+  if (t) for (const r of t.zeilen) {
+    if (r.datum !== datum || /abgesagt/i.test(r.status || "")) continue;
+    const rm = min(r.zeit); if (zm == null || rm == null || Math.abs(rm - zm) < dauer) belegt += Number(r.personen) || 1;
+  }
+  return { kapazitaet: kap, belegt, frei: Math.max(0, kap - belegt) };
+}
+
+/* ---------- Werkzeuge ---------- */
+const B_ROLLEN = { besitzer: ["tabellen", "lesen", "rechnen", "schreiben", "aendern", "loeschen", "tabelle_anlegen", "reservierung_pruefen", "info", "benachrichtigen"],
+                   gast: ["tabellen", "lesen", "schreiben", "reservierung_pruefen", "info", "benachrichtigen"] };
+function bTabSicht(b, rolle, name) {
+  const t = b.tabellen[String(name || "")];
+  if (!t) throw new Error("Tabelle «" + name + "» gibt es nicht. Vorhanden: " + Object.keys(b.tabellen).filter((n) => rolle === "besitzer" || b.tabellen[n].oeffentlich || b.tabellen[n].schreibenOeffentlich).join(", "));
+  if (rolle === "gast" && !t.oeffentlich && !t.schreibenOeffentlich) throw new Error("Auf diese Tabelle hast du keinen Zugriff.");
+  return t;
+}
+function bWerkzeug(b, rolle, name, a) {
+  a = a && typeof a === "object" ? a : {};
+  const J = bJetzt();
+  if (!B_ROLLEN[rolle].includes(name)) return { fehler: "Werkzeug «" + name + "» gibt es nicht oder ist dir nicht erlaubt. Erlaubt: " + B_ROLLEN[rolle].join(", ") };
+  try {
+    if (name === "info") {
+      const e = b.einstellungen;
+      return { betrieb: b.name, heute: J.datum, wochentag: J.wochentag, uhrzeit: J.zeit, oeffnungszeiten: e.oeffnungszeiten, adresse: e.adresse, telefon: e.telefon, hinweise: e.regeln,
+               kapazitaet: e.kapazitaet, reservierungsdauer_min: e.dauer_min };
+    }
+    if (name === "tabellen") {
+      return Object.values(b.tabellen).filter((t) => rolle === "besitzer" || t.oeffentlich || t.schreibenOeffentlich)
+        .map((t) => ({ name: t.name, label: t.label, anzahl: t.zeilen.length, spalten: t.spalten.map((s) => s.k + (s.t !== "text" ? ":" + s.t : "")), lesen: rolle === "besitzer" || !!t.oeffentlich, schreiben: rolle === "besitzer" || !!t.schreibenOeffentlich }));
+    }
+    if (name === "lesen") {
+      const t = bTabSicht(b, rolle, a.tabelle);
+      if (rolle === "gast" && !t.oeffentlich) throw new Error("Diese Tabelle darfst du nicht lesen.");
+      let z = bFilter(t, a.filter, J.datum);
+      const so = a.sortieren && typeof a.sortieren === "object" ? a.sortieren : null;
+      if (so && t.spalten.some((s) => s.k === so.spalte)) {
+        const num = t.spalten.find((s) => s.k === so.spalte).t === "zahl";
+        z = z.slice().sort((x, y) => (num ? Number(x[so.spalte]) - Number(y[so.spalte]) : String(x[so.spalte]).localeCompare(String(y[so.spalte]))) * (so.richtung === "ab" ? -1 : 1));
+      }
+      const limit = Math.max(1, Math.min(200, Number(a.limit) || 50));
+      return { tabelle: t.name, gefunden: z.length, zeilen: z.slice(0, limit) };
+    }
+    if (name === "rechnen") {
+      const t = bTabSicht(b, rolle, a.tabelle);
+      const z = bFilter(t, a.filter, J.datum), art = String(a.art || "anzahl");
+      const sp = (k) => { const s = t.spalten.find((x) => x.k === k); if (!s) throw new Error("Spalte «" + k + "» gibt es nicht. Spalten: " + t.spalten.map((x) => x.k).join(", ")); return s; };
+      const rechne = (rows) => {
+        if (art === "anzahl") return rows.length;
+        sp(a.spalte);
+        let v = rows.map((r) => Number(r[a.spalte])).filter(Number.isFinite);
+        if (art === "summe_produkt") { sp(a.spalte2); v = rows.map((r) => Number(r[a.spalte]) * Number(r[a.spalte2])).filter(Number.isFinite); }
+        if (!v.length) return 0;
+        if (art === "summe" || art === "summe_produkt") return Math.round(v.reduce((x, y) => x + y, 0) * 100) / 100;
+        if (art === "mittel") return Math.round(v.reduce((x, y) => x + y, 0) / v.length * 100) / 100;
+        if (art === "min") return Math.min(...v); if (art === "max") return Math.max(...v);
+        throw new Error("Unbekannte Art «" + art + "». Erlaubt: anzahl summe mittel min max summe_produkt");
+      };
+      if (a.gruppiere) { sp(a.gruppiere); const g = {}; z.forEach((r) => { const k = String(r[a.gruppiere] || "(leer)"); (g[k] = g[k] || []).push(r); }); const o = {}; Object.keys(g).forEach((k) => { o[k] = rechne(g[k]); }); return { art, gruppen: o }; }
+      return { art, spalte: a.spalte || null, ergebnis: rechne(z), zeilen_gerechnet: z.length };
+    }
+    if (name === "reservierung_pruefen") {
+      const datum = bWert({ k: "datum", t: "datum" }, a.datum), zeit = bWert({ k: "zeit", t: "zeit" }, a.zeit), p = Number(a.personen) || 1;
+      if (datum < J.datum) return { moeglich: false, grund: "Das Datum liegt in der Vergangenheit. Heute ist " + J.datum + "." };
+      const x = bBelegung(b, datum, zeit);
+      return { datum, zeit, personen: p, freie_plaetze: x.frei, moeglich: p <= x.frei, hinweis: p <= x.frei ? "frei" : "zu dieser Zeit nur noch " + x.frei + " Plaetze, andere Zeit vorschlagen" };
+    }
+    if (name === "benachrichtigen") {
+      const text = wKurz(a.text, 300); if (!text) throw new Error("text fehlt");
+      bInbox(b, rolle === "gast" ? "gast" : "agent", (rolle === "gast" ? "Nachricht von Gast: " : "") + text);
+      b._dirty = true;
+      return { ok: true, hinweis: "Der Betrieb wurde benachrichtigt." };
+    }
+    if (name === "schreiben") {
+      const t = bTabSicht(b, rolle, a.tabelle);
+      if (rolle === "gast" && !t.schreibenOeffentlich) throw new Error("Hier darfst du nichts eintragen.");
+      const liste = (Array.isArray(a.zeilen) ? a.zeilen : a.zeile && typeof a.zeile === "object" ? [a.zeile] : []).slice(0, rolle === "gast" ? 1 : 100);
+      if (!liste.length) throw new Error("zeilen fehlt (Liste von Objekten mit den Spalten " + t.spalten.map((s) => s.k).join(", ") + ")");
+      if (t.zeilen.length + liste.length > 5000) throw new Error("Tabelle ist voll (5000 Zeilen)");
+      const ids = [];
+      for (const f of liste) {
+        const z = bCols(t, f && typeof f === "object" ? f : {}, false);
+        if (rolle === "gast") {
+          if (t.spalten.some((s) => s.k === "status")) z.status = "neu";
+          if (t.name === "reservierungen" || t.name === "termine") {
+            for (const k of ["name", "datum", "zeit"]) if (!z[k]) throw new Error("Es fehlt: " + k + ". Erst nachfragen.");
+            if (!z.telefon) throw new Error("Es fehlt: telefon. Erst nachfragen.");
+            if (!(Number(z.personen) >= 1)) z.personen = 1;
+            if (z.datum < J.datum) throw new Error("Datum liegt in der Vergangenheit");
+            const x = bBelegung(b, z.datum, z.zeit);
+            if (z.personen > x.frei) throw new Error("Ausgebucht: zu dieser Zeit nur noch " + x.frei + " Plaetze. Andere Zeit vorschlagen.");
+            if (b.einstellungen.auto_bestaetigen) z.status = "bestaetigt";
+          } else if (t.name === "bestellungen") {
+            if (!z.kunde || !z.positionen) throw new Error("Es fehlt Name oder Bestellung. Erst nachfragen.");
+          }
+        }
+        z.id = "r" + (++t.zaehler); z.erstellt = new Date().toISOString();
+        t.zeilen.push(z); ids.push(z.id);
+        if (rolle === "gast") bInbox(b, t.name, "Neu in «" + t.label + "»: " + t.spalten.map((s) => z[s.k]).filter((x) => x !== "" && x != null).join(" · "));
+      }
+      b._dirty = true;
+      return { ok: true, eingetragen: ids.length, ids };
+    }
+    if (name === "aendern") {
+      const t = bTabSicht(b, rolle, a.tabelle);
+      const ziele = a.id ? t.zeilen.filter((z) => z.id === String(a.id)) : bFilter(t, a.filter, J.datum);
+      if (!a.id && !a.filter) throw new Error("id oder filter angeben");
+      if (!ziele.length) throw new Error("Keine passende Zeile gefunden");
+      if (ziele.length > 100) throw new Error("Zu viele Zeilen (" + ziele.length + "), Filter enger fassen");
+      const neu = bCols(t, a.felder && typeof a.felder === "object" ? a.felder : {}, true);
+      if (!Object.keys(neu).length) throw new Error("felder fehlt");
+      ziele.forEach((z) => Object.assign(z, neu));
+      b._dirty = true;
+      return { ok: true, geaendert: ziele.length };
+    }
+    if (name === "loeschen") {
+      const t = bTabSicht(b, rolle, a.tabelle);
+      const ziele = a.id ? t.zeilen.filter((z) => z.id === String(a.id)) : a.filter ? bFilter(t, a.filter, J.datum) : [];
+      if (!ziele.length) throw new Error("id oder filter angeben, es muss mindestens eine Zeile passen");
+      if (ziele.length > 50) throw new Error("Zu viele Zeilen (" + ziele.length + "), Filter enger fassen");
+      const weg = new Set(ziele.map((z) => z.id)); t.zeilen = t.zeilen.filter((z) => !weg.has(z.id));
+      b._dirty = true;
+      return { ok: true, geloescht: weg.size };
+    }
+    if (name === "tabelle_anlegen") {
+      const n = String(a.name || "").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 30);
+      if (n.length < 2 || b.tabellen[n]) throw new Error("Name ungueltig oder schon vergeben");
+      if (Object.keys(b.tabellen).length >= 25) throw new Error("Maximal 25 Tabellen");
+      const sp = (Array.isArray(a.spalten) ? a.spalten : []).slice(0, 15).map((s) => {
+        const o = typeof s === "string" ? { k: s } : s || {}; const k = String(o.k || o.name || "").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 30);
+        return k ? B_S(k, wKurz(o.l || o.label || k, 40), ["zahl", "datum", "zeit"].includes(o.t) ? o.t : "text") : null;
+      }).filter(Boolean);
+      if (!sp.length) throw new Error("spalten fehlt");
+      b.tabellen[n] = B_TAB(n, wKurz(a.label, 40) || n, sp); b._dirty = true;
+      return { ok: true, tabelle: n };
+    }
+    return { fehler: "Unbekanntes Werkzeug" };
+  } catch (e) { return { fehler: e.message }; }
+}
+
+/* ---------- Agent mit Werkzeugen ---------- */
+function bErsterJson(text) {
+  const t = String(text || ""), s = t.indexOf("{"); if (s < 0) return null;
+  let tiefe = 0, imStr = false, esc = false;
+  for (let i = s; i < t.length; i++) {
+    const c = t[i];
+    if (imStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') imStr = false; continue; }
+    if (c === '"') imStr = true; else if (c === "{") tiefe++; else if (c === "}" && --tiefe === 0) { try { return JSON.parse(t.slice(s, i + 1)); } catch (e) { return null; } }
+  }
+  return null;
+}
+function bSystem(b, rolle) {
+  const J = bJetzt(), werk = B_ROLLEN[rolle];
+  const tabs = Object.values(b.tabellen).filter((t) => rolle === "besitzer" || t.oeffentlich || t.schreibenOeffentlich)
+    .map((t) => "- " + t.name + " (" + t.label + ", " + t.zeilen.length + " Zeilen): " + t.spalten.map((s) => s.k + (s.t !== "text" ? ":" + s.t : "")).join(", ")).join("\n");
+  const doku = {
+    tabellen: '{"werkzeug":"tabellen","args":{}} - zeigt alle Tabellen',
+    lesen: '{"werkzeug":"lesen","args":{"tabelle":"lager","filter":[{"spalte":"menge","op":"<=","wert":"@min"}],"sortieren":{"spalte":"name","richtung":"auf"},"limit":50}} - op: = != < <= > >= enthaelt leer nichtleer; wert "@spalte" vergleicht mit anderer Spalte, "heute" = heutiges Datum',
+    rechnen: '{"werkzeug":"rechnen","args":{"tabelle":"lager","art":"summe_produkt","spalte":"menge","spalte2":"einkaufspreis","filter":[],"gruppiere":"lieferant"}} - art: anzahl summe mittel min max summe_produkt (Spalte mal Spalte, z.B. Lagerwert). Rechne NIE im Kopf.',
+    schreiben: '{"werkzeug":"schreiben","args":{"tabelle":"reservierungen","zeilen":[{"name":"Meier","telefon":"079 123 45 67","personen":4,"datum":"2026-10-03","zeit":"19:00"}]}} - neue Zeilen',
+    aendern: '{"werkzeug":"aendern","args":{"tabelle":"lager","id":"r3","felder":{"menge":20}}} oder statt id ein "filter" fuer mehrere Zeilen',
+    loeschen: '{"werkzeug":"loeschen","args":{"tabelle":"lager","id":"r3"}} oder "filter"',
+    tabelle_anlegen: '{"werkzeug":"tabelle_anlegen","args":{"name":"lieferanten","label":"Lieferanten","spalten":[{"k":"name"},{"k":"telefon"},{"k":"lieferzeit_tage","t":"zahl"}]}}',
+    reservierung_pruefen: '{"werkzeug":"reservierung_pruefen","args":{"datum":"2026-10-03","zeit":"19:00","personen":4}} - freie Plaetze zu dieser Zeit',
+    info: '{"werkzeug":"info","args":{}} - Oeffnungszeiten, Adresse, Telefon, Hinweise, heutiges Datum',
+    benachrichtigen: '{"werkzeug":"benachrichtigen","args":{"text":"..."}} - Nachricht in den Posteingang des Betriebs',
+  };
+  const regeln = rolle === "besitzer"
+    ? `Du sprichst mit dem Inhaber oder Team von «${b.name}». Du hast volle Rechte auf alle Tabellen. Arbeite wie ein guter Betriebsassistent: Lager analysieren (was ist unter Mindestmenge, was laeuft ab, was kostet der Bestand), Einkaufslisten nach Lieferant gruppieren, Reservierungen und Bestellungen ordnen, Tagesberichte schreiben, Daten eintragen, die der Inhaber diktiert oder einfuegt (zerlege Listen in einzelne Zeilen und trage sie mit EINEM schreiben-Aufruf ein). Lies zuerst die Daten, dann antworte mit konkreten Zahlen. Nach jeder Aenderung sage klar, was du geaendert hast. Loeschen nur, wenn der Inhaber es verlangt.`
+    : `Du sprichst mit einem Gast oder Kunden von «${b.name}». Du darfst Oeffnungszeiten und Infos nennen, freie Plaetze pruefen, Speisekarte bzw. Produkte lesen, und Reservierungen, Bestellungen oder Anfragen aufnehmen. Du siehst und nennst NIEMALS Daten anderer Gaeste, Lagerbestaende, Einkaufspreise oder Umsaetze. Reservierung: zuerst reservierung_pruefen, dann Name, Telefon, Personen, Datum und Uhrzeit erfragen, dann schreiben, dann Bestaetigung nennen. Bei Dingen, die du nicht kannst (Beschwerden, Sonderwuensche, Rueckerstattungen), nimm die Anfrage mit "schreiben" in "anfragen" auf oder nutze "benachrichtigen" und sage, dass sich der Betrieb meldet.`;
+  return `${b.prompt || "Du bist ein freundlicher digitaler Assistent."}
+
+# BETRIEBS-WERKZEUGE
+Heute ist ${J.wochentag}, ${J.datum}, ${J.zeit} Uhr (Schweiz).
+${regeln}
+
+So antwortest du: IMMER mit genau EINEM JSON-Objekt, sonst nichts.
+- Werkzeug nutzen: {"werkzeug":"<name>","args":{...}}  (du bekommst danach das Ergebnis und machst weiter)
+- Fertig, Antwort an den Menschen: {"antwort":"<dein Text, Deutsch, kurz und klar>"}
+Erfinde keine Daten. Was nicht in den Tabellen oder im Betriebswissen steht, weisst du nicht. Bei einem Fehler im Ergebnis korrigiere den Aufruf.
+
+WERKZEUGE:
+${werk.map((n) => doku[n]).join("\n")}
+
+TABELLEN:
+${tabs || "(keine)"}`;
+}
+async function bAgent(b, rolle, history) {
+  let msgs = (Array.isArray(history) ? history : []).slice(-12)
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim())
+    .map((m) => ({ role: m.role, content: String(m.content).slice(0, 2000) }));
+  while (msgs.length && msgs[0].role !== "user") msgs.shift();
+  msgs = msgs.filter((m, i) => i === 0 || m.role !== msgs[i - 1].role);
+  if (!msgs.length || msgs[msgs.length - 1].role !== "user") throw new Error("Keine Frage erhalten");
+  const system = bSystem(b, rolle), verlauf = msgs.slice(), genutzt = [];
+  for (let schritt = 0; schritt < 7; schritt++) {
+    const r = await global.__nxApp.kern.rotiere({ system, messages: verlauf, max_tokens: 1500, art: "normal" });
+    if (r.status !== 200) throw new Error((r.body && r.body.error) || "Kein Modell erreichbar");
+    const text = String(r.body.text || "").trim();
+    const j = bErsterJson(text);
+    if (!j) return { text: text || "…", werkzeuge: genutzt };
+    if (j.antwort != null) return { text: String(j.antwort).slice(0, 4000) || "…", werkzeuge: genutzt };
+    if (j.werkzeug) {
+      const live = bLaden(b.id) || b;                     // frisch lesen: Daten koennen sich zwischenzeitlich geaendert haben
+      const erg = bWerkzeug(live, rolle, String(j.werkzeug), j.args);
+      if (live._dirty) { delete live._dirty; bSpeichern(live); }
+      Object.assign(b, { tabellen: live.tabellen, inbox: live.inbox });
+      genutzt.push(String(j.werkzeug));
+      verlauf.push({ role: "assistant", content: JSON.stringify({ werkzeug: j.werkzeug, args: j.args || {} }) });
+      verlauf.push({ role: "user", content: "ERGEBNIS von " + j.werkzeug + ": " + JSON.stringify(erg).slice(0, 7000) + "\nMach weiter oder antworte jetzt mit {\"antwort\": \"...\"}." });
+      continue;
+    }
+    return { text: text.slice(0, 4000), werkzeuge: genutzt };
+  }
+  return { text: "Das waren mir zu viele Schritte auf einmal. Bitte stell die Aufgabe etwas kleiner.", werkzeuge: genutzt };
+}
+
+/* ---------- Begrenzung gegen Missbrauch ---------- */
+const B_IP = {};
+function bIp(req) { return String((req.headers["x-forwarded-for"] || req.headers["x-real-ip"] || (req.socket && req.socket.remoteAddress) || "?")).split(",")[0].trim(); }
+function bBremse(req, id) {
+  const k = id + "|" + bIp(req), jetzt = Date.now(), l = (B_IP[k] || []).filter((t) => jetzt - t < 5 * 60e3);
+  if (l.length >= 20) { B_IP[k] = l; return false; }
+  l.push(jetzt); B_IP[k] = l;
+  if (Object.keys(B_IP).length > 5000) for (const x of Object.keys(B_IP)) if (!B_IP[x].length || jetzt - B_IP[x][B_IP[x].length - 1] > 3e5) delete B_IP[x];
+  return true;
+}
+function bTageslimit(b, rolle) {
+  const tag = bJetzt().datum;
+  if (b.zaehler.tag !== tag) b.zaehler = { tag, oeffentlich: 0 };
+  if (rolle === "gast") { if (b.zaehler.oeffentlich >= 600) return false; b.zaehler.oeffentlich++; }
+  return true;
+}
+
+/* ---------- Routen: oeffentlich (/b/<id>/...) und intern (/betrieb/...) ---------- */
+const B_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data: https://api.qrserver.com; base-uri 'none'; form-action 'none'";
+function bSeite(res, code, html, rahmen) {
+  res.writeHead(code, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+                        "Content-Security-Policy": B_CSP + (rahmen ? "" : "; frame-ancestors 'none'") });
+  res.end(html);
+}
+function bCsv(text, t) {
+  const zeilen = String(text || "").split(/\r?\n/).map((z) => z.trim()).filter(Boolean);
+  if (!zeilen.length) return [];
+  const delim = zeilen[0].includes("\t") ? "\t" : zeilen[0].includes(";") ? ";" : ",";
+  const teile = (z) => { const o = []; let cur = "", q = false; for (const c of z) { if (c === '"') q = !q; else if (c === delim && !q) { o.push(cur.trim()); cur = ""; } else cur += c; } o.push(cur.trim()); return o; };
+  let kopf = teile(zeilen[0]).map((x) => x.toLowerCase());
+  const keys = t.spalten.map((s) => s.k), labels = t.spalten.map((s) => s.l.toLowerCase());
+  const istKopf = kopf.filter((x) => keys.includes(x) || labels.includes(x)).length >= Math.max(1, Math.ceil(kopf.length / 2));
+  const spalten = istKopf ? kopf.map((x) => keys.includes(x) ? x : keys[labels.indexOf(x)] || null) : keys;
+  return zeilen.slice(istKopf ? 1 : 0).map((z) => { const v = teile(z), o = {}; spalten.forEach((k, i) => { if (k && v[i] !== undefined) o[k] = v[i]; }); return o; });
+}
+async function betriebOeffentlich(p, req, res, url, CORS) {
+  const m = p.match(/^\/b\/([a-z0-9][a-z0-9-]{2,40})(?:\/(.*))?$/);
+  if (!m) return false;
+  const id = m[1], rest = (m[2] || "").replace(/\/$/, "");
+  const b = bLaden(id);
+  if (!b) { bSeite(res, 404, "<!doctype html><meta charset=utf-8><body style='font:16px system-ui;padding:40px'>Diese Seite gibt es nicht.</body>", true); return true; }
+  const GET = req.method === "GET" || req.method === "HEAD", POST = req.method === "POST";
+  const lesBody = async () => { try { return JSON.parse(await lies(req, 256 * 1024)); } catch (e) { return null; } };
+
+  if (GET && rest === "") { bSeite(res, 200, BETRIEB_SEITEN.besitzer, false); return true; }
+  if (GET && rest === "chat") {
+    const daten = { name: b.name, agent: b.agentName, greeting: b.greeting, farbe: b.farbe,
+                    vorschlaege: b.preset === "restaurant" ? ["Tisch reservieren", "Öffnungszeiten?", "Was steht auf der Karte?"] : b.preset === "shop" ? ["Was gibt es Neues?", "Wo ist meine Bestellung?", "Öffnungszeiten?"] : ["Termin buchen", "Was kostet das?", "Öffnungszeiten?"] };
+    bSeite(res, 200, BETRIEB_SEITEN.gast.replace("/*BDATA*/null", JSON.stringify(daten).replace(/</g, "\\u003c")), true); return true;
+  }
+  if (GET && rest === "embed.js") {
+    res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" });
+    res.end(BETRIEB_SEITEN.embed.replace("__FARBE__", b.farbe)); return true;
+  }
+  if (POST && rest === "chat") {
+    const body = await lesBody();
+    if (!body) { json(res, 400, { error: "Ungueltige Anfrage" }, {}); return true; }
+    if (!bBremse(req, id)) { json(res, 429, { error: "Bitte einen Moment warten, es kommen gerade zu viele Nachrichten." }, {}); return true; }
+    if (!bTageslimit(b, "gast")) { json(res, 429, { error: "Der Assistent ist für heute ausgelastet. Bitte rufen Sie uns an." }, {}); return true; }
+    bSpeichern(b);
+    try {
+      const r = await bAgent(b, "gast", body.messages);
+      const f = bLaden(id) || b, msgs = (body.messages || []).filter((x) => x && x.role === "user");
+      f.gespraeche.unshift({ zeit: new Date().toISOString(), frage: wKurz(msgs.length ? msgs[msgs.length - 1].content : "", 200), antwort: wKurz(r.text, 240) });
+      if (f.gespraeche.length > 100) f.gespraeche.length = 100;
+      bSpeichern(f);
+      json(res, 200, { ok: true, text: r.text }, {});
+    } catch (e) { console.warn("[betrieb] " + id + ": " + e.message); json(res, 502, { error: "Da ist etwas schiefgelaufen. Bitte versuchen Sie es gleich nochmal oder rufen Sie uns an." }, {}); }
+    return true;
+  }
+  if (rest.startsWith("api/")) {
+    if (!bTokenOk(b, req.headers["x-token"])) { json(res, 401, { error: "Kein Zugang. Link mit #t=… verwenden." }, {}); return true; }
+    const a = rest.slice(4);
+    const speichere = () => { if (b._dirty) delete b._dirty; bSpeichern(b); };
+    if (GET && a === "daten") {
+      const e = Object.assign({}, b.einstellungen, { telegramGesetzt: !!b.einstellungen.telegramToken, telegramToken: "" });
+      json(res, 200, { name: b.name, agentName: b.agentName, preset: b.preset, tabellen: b.tabellen, einstellungen: e, inbox: b.inbox.slice(0, 100), gespraeche: b.gespraeche.slice(0, 30),
+                       demo: Object.keys(bDemo(b.preset)).some((k) => b.tabellen[k] && !b.tabellen[k].zeilen.length) }, {}); return true;
+    }
+    if (!POST) { json(res, 404, { error: "Unbekannt" }, {}); return true; }
+    const body = await lesBody(); if (!body) { json(res, 400, { error: "Ungueltige Anfrage" }, {}); return true; }
+    if (a === "chat") {
+      try { const r = await bAgent(b, "besitzer", body.messages); json(res, 200, { ok: true, text: r.text, werkzeuge: r.werkzeuge }, {}); }
+      catch (e) { json(res, 502, { error: e.message }, {}); }
+      return true;
+    }
+    if (a === "zeile") {
+      const wz = body.aktion === "neu" ? ["schreiben", { tabelle: body.tabelle, zeilen: [body.felder || {}] }]
+        : body.aktion === "aendern" ? ["aendern", { tabelle: body.tabelle, id: body.id, felder: body.felder || {} }]
+        : body.aktion === "loeschen" ? ["loeschen", { tabelle: body.tabelle, id: body.id }] : null;
+      if (!wz) { json(res, 400, { error: "Unbekannte Aktion" }, {}); return true; }
+      const r = bWerkzeug(b, "besitzer", wz[0], wz[1]);
+      if (r.fehler) { json(res, 400, { error: r.fehler }, {}); return true; }
+      speichere(); json(res, 200, r, {}); return true;
+    }
+    if (a === "import") {
+      const t = b.tabellen[String(body.tabelle || "")];
+      if (!t) { json(res, 400, { error: "Tabelle unbekannt" }, {}); return true; }
+      const rows = bCsv(body.text, t).slice(0, 1000);
+      if (!rows.length) { json(res, 400, { error: "Nichts zum Einfügen gefunden" }, {}); return true; }
+      let n = 0;
+      for (let i = 0; i < rows.length; i += 100) {
+        const r = bWerkzeug(b, "besitzer", "schreiben", { tabelle: t.name, zeilen: rows.slice(i, i + 100) });
+        if (r.fehler) { if (n) speichere(); json(res, 400, { error: "Ab Zeile " + (i + 1) + ": " + r.fehler }, {}); return true; }
+        n += r.eingetragen;
+      }
+      speichere(); json(res, 200, { ok: true, eingetragen: n }, {}); return true;
+    }
+    if (a === "tabelle") {
+      if (body.aktion === "weg") { if (!b.tabellen[body.name]) { json(res, 404, { error: "Unbekannt" }, {}); return true; } delete b.tabellen[body.name]; speichere(); json(res, 200, { ok: true }, {}); return true; }
+      const r = bWerkzeug(b, "besitzer", "tabelle_anlegen", body);
+      if (r.fehler) { json(res, 400, { error: r.fehler }, {}); return true; }
+      speichere(); json(res, 200, r, {}); return true;
+    }
+    if (a === "einstellungen") {
+      const e = b.einstellungen;
+      for (const k of ["name", "oeffnungszeiten", "adresse", "telefon", "regeln", "telegramChat"]) if (typeof body[k] === "string") e[k] = wKurz(body[k], k === "regeln" || k === "oeffnungszeiten" ? 600 : 120);
+      if (typeof body.telegramToken === "string" && /^[0-9]{5,12}:[A-Za-z0-9_-]{20,60}$/.test(body.telegramToken.trim())) e.telegramToken = body.telegramToken.trim();
+      if (body.kapazitaet != null) e.kapazitaet = Math.max(0, Math.min(2000, Number(body.kapazitaet) || 0));
+      if (body.dauer_min != null) e.dauer_min = Math.max(15, Math.min(600, Number(body.dauer_min) || 120));
+      if (body.auto_bestaetigen != null) e.auto_bestaetigen = body.auto_bestaetigen === true || body.auto_bestaetigen === "1" || body.auto_bestaetigen === 1;
+      if (e.name) b.name = e.name;
+      speichere(); json(res, 200, { ok: true }, {}); return true;
+    }
+    if (a === "inbox") {
+      if (body.aktion === "leeren") b.inbox = []; else b.inbox.forEach((x) => { x.gelesen = true; });
+      speichere(); json(res, 200, { ok: true }, {}); return true;
+    }
+    if (a === "demo") {
+      const d = bDemo(b.preset);
+      for (const k of Object.keys(d)) if (b.tabellen[k] && !b.tabellen[k].zeilen.length) bWerkzeug(b, "besitzer", "schreiben", { tabelle: k, zeilen: d[k] });
+      speichere(); json(res, 200, { ok: true }, {}); return true;
+    }
+    json(res, 404, { error: "Unbekannt" }, {}); return true;
+  }
+  json(res, 404, { error: "Unbekannt" }, {}); return true;
+}
+
+// Intern, nur mit Zugangs-Pfad: Betriebe anlegen und verwalten (aus der Lab-App)
+async function betriebIntern(p, req, res, url, CORS) {
+  const POST = req.method === "POST";
+  const lesBody = async () => { try { return JSON.parse(await lies(req, 512 * 1024)); } catch (e) { return null; } };
+  if (p === "/betrieb/liste" && !POST) {
+    json(res, 200, { ok: true, betriebe: bListe().map((b) => ({ id: b.id, name: b.name, preset: b.preset, token: b.token, erstellt: b.erstellt, agentName: b.agentName, anfragen: b.inbox.filter((x) => !x.gelesen).length })) }, CORS); return true;
+  }
+  const body = POST ? await lesBody() : null;
+  if (!body) { json(res, 400, { error: "Ungueltige Anfrage" }, CORS); return true; }
+  if (p === "/betrieb/neu") {
+    const b = bNeu(body);
+    json(res, 200, { ok: true, id: b.id, token: b.token, name: b.name, preset: b.preset }, CORS); return true;
+  }
+  const b = bLaden(String(body.id || ""));
+  if (!b) { json(res, 404, { error: "Betrieb nicht gefunden" }, CORS); return true; }
+  if (p === "/betrieb/agent") {
+    if (typeof body.prompt === "string") b.prompt = body.prompt.slice(0, 20000);
+    if (body.agentName) b.agentName = wKurz(body.agentName, 60);
+    if (body.greeting) b.greeting = wKurz(body.greeting, 300);
+    if (/^#[0-9a-f]{6}$/i.test(body.farbe || "")) b.farbe = body.farbe;
+    bSpeichern(b); json(res, 200, { ok: true }, CORS); return true;
+  }
+  if (p === "/betrieb/loeschen") {
+    try { fs.unlinkSync(path.join(SYNC_DIR, "_betrieb-" + b.id + ".json")); } catch (e) {}
+    json(res, 200, { ok: true }, CORS); return true;
+  }
+  json(res, 404, { error: "Unbekannt" }, CORS); return true;
+}
+
+/*SEITEN-START*/
+const BETRIEB_SEITEN = {"besitzer": "<!DOCTYPE html>\n<html lang=\"de\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">\n<meta name=\"robots\" content=\"noindex\"><title>Mein Betrieb</title>\n<style>\n:root{--bg:#0d0e14;--p:#161824;--l:#2a2d3e;--t:#eceef6;--m:#9a9fb8;--a:#9BFF3D;--r:#FF4D6D;--c:#22E0FF;--y:#FFD23F}\n*{box-sizing:border-box}html,body{margin:0}body{font:16px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--t);padding-bottom:84px}\nheader{padding:16px;border-bottom:1px solid var(--l);display:flex;justify-content:space-between;align-items:center}\nheader b{font-size:18px}header small{color:var(--m);display:block;font-size:12.5px}\nnav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--p);border-top:1px solid var(--l);padding-bottom:env(safe-area-inset-bottom);z-index:5}\nnav button{flex:1;background:none;border:0;color:var(--m);padding:11px 2px 9px;font:inherit;font-size:12px;cursor:pointer;position:relative}\nnav button span{display:block;font-size:21px}nav button.on{color:var(--a)}\nnav i{position:absolute;top:5px;right:22%;background:var(--r);color:#fff;border-radius:99px;font-style:normal;font-size:11px;padding:1px 6px}\nmain{padding:14px;max-width:900px;margin:0 auto}\n.card{background:var(--p);border:1px solid var(--l);border-radius:8px;padding:13px;margin-bottom:10px}\n.btn{background:var(--a);color:#0d0e14;border:0;border-radius:6px;padding:11px 16px;font:inherit;font-weight:700;cursor:pointer}\n.btn.g{background:transparent;color:var(--t);border:1px solid var(--l)}.btn.r{background:var(--r);color:#fff}.btn.s{padding:7px 11px;font-size:14px}\n.btn:disabled{opacity:.5}\ninput,textarea,select{width:100%;background:#0b0c12;color:var(--t);border:1px solid var(--l);border-radius:6px;padding:11px;font:inherit}\nlabel{display:block;color:var(--m);font-size:12.5px;margin:11px 0 4px;text-transform:uppercase;letter-spacing:.04em}\n.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.chips button{background:var(--p);border:1px solid var(--l);color:var(--t);border-radius:99px;padding:8px 13px;font:inherit;font-size:14px;cursor:pointer}\n.chips button.on{border-color:var(--a);color:var(--a)}\n#chat{display:flex;flex-direction:column;gap:9px;min-height:40vh}\n.m{padding:10px 13px;border-radius:12px;white-space:pre-wrap;word-wrap:break-word;max-width:94%}\n.u{background:#243a1a;align-self:flex-end;border:1px solid #3a5a28}.b{background:var(--p);border:1px solid var(--l);align-self:flex-start}\n.w{opacity:.6}small.t{color:var(--m);display:block;margin-top:5px;font-size:12px}\n.row{display:flex;gap:8px}table{border-collapse:collapse;width:100%;font-size:14px}th,td{border-bottom:1px solid var(--l);padding:8px 7px;text-align:left;vertical-align:top}\nth{color:var(--m);font-weight:600;font-size:12px;text-transform:uppercase;position:sticky;top:0;background:var(--bg)}\ntr.low td{background:rgba(255,77,109,.14)}tr.sel td{background:rgba(155,255,61,.1)}tr{cursor:pointer}\n.sc{overflow:auto;max-height:55vh;border:1px solid var(--l);border-radius:8px}\n.msg{padding:11px 13px;border-radius:8px;margin-bottom:8px;background:var(--p);border:1px solid var(--l)}.msg.neu{border-color:var(--y)}\n.err{color:var(--r)}.ok{color:var(--a)}pre{white-space:pre-wrap;word-break:break-all;background:#0b0c12;border:1px solid var(--l);border-radius:6px;padding:10px;font-size:13px}\n</style></head><body>\n<header><div><b id=\"nm\">Mein Betrieb</b><small id=\"sb\"></small></div><button class=\"btn g s\" id=\"ld\">Aktualisieren</button></header>\n<main id=\"m\"></main>\n<nav id=\"nv\"></nav>\n<script>\nvar ID=location.pathname.split(\"/\").filter(Boolean)[1],TOK=\"\";\ntry{TOK=(location.hash.match(/t=([a-f0-9]+)/)||[])[1]||sessionStorage.getItem(\"bt-\"+ID)||\"\";if(TOK)sessionStorage.setItem(\"bt-\"+ID,TOK)}catch(e){}\nvar D=null,tab=\"agent\",tabelle=\"\",auswahl=null,verlauf=[],busy=false,form=false,notiz=\"\";\nvar api=function(p,body){return fetch(\"/b/\"+ID+\"/api/\"+p,{method:body?\"POST\":\"GET\",headers:{\"x-token\":TOK,\"Content-Type\":\"application/json\"},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json().then(function(d){if(!r.ok)throw new Error(d.error||(\"Fehler \"+r.status));return d})})};\nvar $=function(h){var d=document.createElement(\"div\");d.innerHTML=h;return d.firstChild};\nfunction esc(s){return String(s==null?\"\":s).replace(/[&<>\"']/g,function(c){return {\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",'\"':\"&quot;\",\"'\":\"&#39;\"}[c]})}\nfunction laden(){return api(\"daten\").then(function(d){D=d;if(!tabelle||!D.tabellen[tabelle])tabelle=Object.keys(D.tabellen)[0];draw()}).catch(function(e){document.getElementById(\"m\").innerHTML='<div class=\"card err\">'+esc(e.message)+'<br><small class=\"t\">Link prüfen: Er muss mit #t=… enden.</small></div>'})}\nfunction nav(){var ungel=D?D.inbox.filter(function(x){return !x.gelesen}).length:0;\n  document.getElementById(\"nv\").innerHTML=[[\"agent\",\"💬\",\"Agent\"],[\"daten\",\"📋\",\"Daten\"],[\"post\",\"📥\",\"Post\"],[\"einst\",\"⚙️\",\"Einstellungen\"]].map(function(t){return '<button class=\"'+(tab===t[0]?\"on\":\"\")+'\" data-t=\"'+t[0]+'\"><span>'+t[1]+'</span>'+t[2]+(t[0]===\"post\"&&ungel?'<i>'+ungel+'</i>':'')+'</button>'}).join(\"\");\n  Array.prototype.forEach.call(document.querySelectorAll(\"nav button\"),function(b){b.onclick=function(){tab=b.getAttribute(\"data-t\");form=false;auswahl=null;draw()}})}\nfunction draw(){if(!D)return;document.getElementById(\"nm\").textContent=D.name;document.getElementById(\"sb\").textContent=D.agentName+\" · \"+D.preset;nav();\n  var m=document.getElementById(\"m\");m.innerHTML=\"\";\n  if(tab===\"agent\")zAgent(m);else if(tab===\"daten\")zDaten(m);else if(tab===\"post\")zPost(m);else zEinst(m)}\nvar SCH=[\"Prüf mein Lager: was ist unter Mindestmenge? Mach eine Einkaufsliste nach Lieferant.\",\"Welche Reservierungen und Bestellungen sind heute und morgen offen? Ordne sie nach Uhrzeit.\",\"Schreib mir einen Tagesbericht: Lager, Reservierungen, offene Bestellungen, Auffälligkeiten.\",\"Was ist das Lager insgesamt wert, aufgeteilt nach Lieferant?\"],SCHL=[\"📦 Lager prüfen\",\"📅 Heute & morgen\",\"📝 Tagesbericht\",\"💰 Lagerwert\"];\nfunction zAgent(m){\n  m.appendChild($('<div class=\"chips\">'+SCH.map(function(t,i){return '<button data-i=\"'+i+'\">'+SCHL[i]+'</button>'}).join(\"\")+'</div>'));\n  Array.prototype.forEach.call(m.querySelectorAll(\".chips button\"),function(b){b.onclick=function(){senden(SCH[+b.getAttribute(\"data-i\")])}});\n  var c=$('<div id=\"chat\"></div>');m.appendChild(c);\n  if(!verlauf.length)c.appendChild($('<div class=\"m b\">Hallo! Ich bin '+esc(D.agentName)+'. Ich kann dein Lager analysieren, Reservierungen und Bestellungen ordnen, Daten eintragen und Berichte schreiben. Du kannst mir auch Listen einfach hineinkopieren, ich trage sie ein.</div>'));\n  verlauf.forEach(function(v){var d=$('<div class=\"m '+(v.role===\"user\"?\"u\":\"b\")+'\"></div>');d.textContent=v.content;c.appendChild(d);if(v.w&&v.w.length){var s=$('<small class=\"t\"></small>');s.textContent=\"Werkzeuge: \"+v.w.join(\", \");d.appendChild(s)}});\n  var f=$('<div class=\"row\" style=\"margin-top:12px\"><textarea id=\"q\" rows=\"2\" placeholder=\"Frag oder befiehl etwas …\"></textarea><button class=\"btn\" id=\"sd\">Senden</button></div>');m.appendChild(f);\n  document.getElementById(\"sd\").onclick=function(){senden(document.getElementById(\"q\").value)};\n  var q=document.getElementById(\"q\");q.addEventListener(\"keydown\",function(e){if(e.key===\"Enter\"&&!e.shiftKey){e.preventDefault();senden(q.value)}});\n  window.scrollTo(0,document.body.scrollHeight)}\nfunction senden(t){t=(t||\"\").trim();if(!t||busy)return;busy=true;verlauf.push({role:\"user\",content:t});draw();\n  var c=document.getElementById(\"chat\");var w=$('<div class=\"m b w\">Ich arbeite daran …</div>');c.appendChild(w);window.scrollTo(0,document.body.scrollHeight);\n  api(\"chat\",{messages:verlauf.slice(-12).map(function(v){return {role:v.role,content:v.content}})}).then(function(d){verlauf.push({role:\"assistant\",content:d.text,w:d.werkzeuge});return laden()}).catch(function(e){verlauf.push({role:\"assistant\",content:\"Fehler: \"+e.message})}).then(function(){busy=false;draw()})}\nfunction sp(t){return t.spalten}\nfunction zDaten(m){\n  var ch=$('<div class=\"chips\"></div>');Object.keys(D.tabellen).forEach(function(n){var t=D.tabellen[n],b=$('<button class=\"'+(n===tabelle?\"on\":\"\")+'\">'+esc(t.label)+' ('+t.zeilen.length+')</button>');b.onclick=function(){tabelle=n;auswahl=null;form=false;draw()};ch.appendChild(b)});m.appendChild(ch);\n  var t=D.tabellen[tabelle];if(!t)return;\n  var bar=$('<div class=\"row\" style=\"margin-bottom:10px;flex-wrap:wrap\"></div>');\n  var b1=$('<button class=\"btn s\">＋ Neue Zeile</button>');b1.onclick=function(){auswahl=null;form=true;draw()};\n  var b2=$('<button class=\"btn g s\">Liste einfügen (CSV/Excel)</button>');b2.onclick=function(){form=\"import\";draw()};\n  bar.appendChild(b1);bar.appendChild(b2);\n  var anz=t.zeilen.length===0&&D.demo?$('<button class=\"btn g s\">Beispieldaten</button>'):null;if(anz){anz.onclick=function(){api(\"demo\",{}).then(laden)};bar.appendChild(anz)}\n  m.appendChild(bar);\n  if(notiz){m.appendChild($('<div class=\"card '+(/^Fehler/.test(notiz)?\"err\":\"ok\")+'\">'+esc(notiz)+'</div>'))}\n  if(form===\"import\"){var c=$('<div class=\"card\"><label>Tabelle: Zeilen einfügen (eine pro Zeile, Spalten mit Tab, ; oder ,). Erste Zeile darf die Spaltennamen enthalten.</label><div style=\"color:var(--m);font-size:13px;margin-bottom:6px\">Reihenfolge: '+esc(sp(t).map(function(s){return s.k}).join(\" ; \"))+'</div><textarea id=\"imp\" rows=\"8\"></textarea><div class=\"row\" style=\"margin-top:10px\"><button class=\"btn\" id=\"go\">Einfügen</button><button class=\"btn g\" id=\"x\">Abbrechen</button></div></div>');m.appendChild(c);\n    document.getElementById(\"x\").onclick=function(){form=false;draw()};document.getElementById(\"go\").onclick=function(){api(\"import\",{tabelle:tabelle,text:document.getElementById(\"imp\").value}).then(function(d){notiz=d.eingetragen+\" Zeilen eingetragen.\";form=false;return laden()}).catch(function(e){notiz=\"Fehler: \"+e.message;draw()})};return}\n  if(form){var z=auswahl?t.zeilen.filter(function(r){return r.id===auswahl})[0]||{}:{};\n    var h='<div class=\"card\"><b>'+(auswahl?\"Zeile ändern\":\"Neue Zeile\")+'</b>'+sp(t).map(function(s){return '<label>'+esc(s.l)+'</label><input data-k=\"'+esc(s.k)+'\" value=\"'+esc(z[s.k]==null?\"\":z[s.k])+'\" '+(s.t===\"datum\"?'placeholder=\"JJJJ-MM-TT\"':s.t===\"zeit\"?'placeholder=\"HH:MM\"':s.t===\"zahl\"?'inputmode=\"decimal\"':'')+'>'}).join(\"\")+'<div class=\"row\" style=\"margin-top:12px\"><button class=\"btn\" id=\"sv\">Speichern</button><button class=\"btn g\" id=\"x\">Abbrechen</button>'+(auswahl?'<button class=\"btn r\" id=\"dl\">Löschen</button>':'')+'</div></div>';\n    m.appendChild($(h));document.getElementById(\"x\").onclick=function(){form=false;auswahl=null;draw()};\n    document.getElementById(\"sv\").onclick=function(){var f={};Array.prototype.forEach.call(m.querySelectorAll(\"input[data-k]\"),function(i){f[i.getAttribute(\"data-k\")]=i.value});\n      api(\"zeile\",{tabelle:tabelle,aktion:auswahl?\"aendern\":\"neu\",id:auswahl,felder:f}).then(function(){notiz=\"Gespeichert.\";form=false;auswahl=null;return laden()}).catch(function(e){notiz=\"Fehler: \"+e.message;draw()})};\n    if(auswahl)document.getElementById(\"dl\").onclick=function(){if(confirm(\"Wirklich löschen?\"))api(\"zeile\",{tabelle:tabelle,aktion:\"loeschen\",id:auswahl}).then(function(){notiz=\"Gelöscht.\";form=false;auswahl=null;return laden()}).catch(function(e){notiz=\"Fehler: \"+e.message;draw()})};return}\n  if(!t.zeilen.length){m.appendChild($('<div class=\"card\" style=\"color:var(--m)\">Noch leer. Füge Zeilen hinzu, kopiere eine Liste hinein, oder sag es einfach dem Agenten im Tab «Agent».</div>'));return}\n  var hasMin=t.spalten.some(function(s){return s.k===\"menge\"})&&t.spalten.some(function(s){return s.k===\"min\"});\n  var tb='<div class=\"sc\"><table><tr>'+sp(t).map(function(s){return '<th>'+esc(s.l)+'</th>'}).join(\"\")+'</tr>'+t.zeilen.map(function(r){var low=hasMin&&r.min!==\"\"&&Number(r.menge)<=Number(r.min);return '<tr class=\"'+(low?\"low\":\"\")+'\" data-id=\"'+esc(r.id)+'\">'+sp(t).map(function(s){return '<td>'+esc(r[s.k])+'</td>'}).join(\"\")+'</tr>'}).join(\"\")+'</table></div>'+(hasMin?'<small class=\"t\">Rot = Menge unter Mindestmenge</small>':'');\n  m.appendChild($(tb));Array.prototype.forEach.call(m.querySelectorAll(\"tr[data-id]\"),function(tr){tr.onclick=function(){auswahl=tr.getAttribute(\"data-id\");form=true;draw()}})}\nfunction zPost(m){\n  var top=$('<div class=\"row\" style=\"margin-bottom:10px\"><button class=\"btn g s\" id=\"al\">Alle gelesen</button><button class=\"btn g s\" id=\"lo\">Leeren</button></div>');m.appendChild(top);\n  document.getElementById(\"al\").onclick=function(){api(\"inbox\",{aktion:\"gelesen\"}).then(laden)};document.getElementById(\"lo\").onclick=function(){if(confirm(\"Posteingang leeren?\"))api(\"inbox\",{aktion:\"leeren\"}).then(laden)};\n  if(!D.inbox.length)m.appendChild($('<div class=\"card\" style=\"color:var(--m)\">Keine Nachrichten. Neue Reservierungen, Bestellungen und Anfragen deiner Gäste erscheinen hier.</div>'));\n  D.inbox.forEach(function(x){var d=$('<div class=\"msg '+(x.gelesen?\"\":\"neu\")+'\"></div>');d.textContent=x.text;var s=$('<small class=\"t\"></small>');s.textContent=new Date(x.zeit).toLocaleString(\"de-CH\")+\" · \"+x.art;d.appendChild(s);m.appendChild(d)});\n  if(D.gespraeche.length){m.appendChild($('<label style=\"margin-top:20px\">Was Gäste den Agenten gefragt haben</label>'));D.gespraeche.forEach(function(g){var d=$('<div class=\"msg\"></div>');d.textContent=\"❓ \"+g.frage+\"\\n💬 \"+g.antwort;d.style.whiteSpace=\"pre-wrap\";var s=$('<small class=\"t\"></small>');s.textContent=new Date(g.zeit).toLocaleString(\"de-CH\");d.appendChild(s);m.appendChild(d)})}}\nfunction zEinst(m){var e=D.einstellungen,o=location.origin,chat=o+\"/b/\"+ID+\"/chat\",code='<script src=\"'+o+'/b/'+ID+'/embed.js\" async></'+'script>';\n  var f=[[\"name\",\"Name des Betriebs\"],[\"oeffnungszeiten\",\"Öffnungszeiten (z.B. Di–Sa 11:30–14:00 und 17:30–23:00, So/Mo Ruhetag)\"],[\"adresse\",\"Adresse\"],[\"telefon\",\"Telefon\"],[\"regeln\",\"Hinweise für den Agenten (z.B. Hunde erlaubt, Gruppen ab 8 nur auf Anfrage)\"],[\"kapazitaet\",\"Plätze pro Zeitfenster (für Reservierungen)\"],[\"dauer_min\",\"Dauer einer Reservierung in Minuten\"]];\n  m.appendChild($('<div class=\"card\"><b>Betrieb</b>'+f.map(function(x){return '<label>'+esc(x[1])+'</label><input data-e=\"'+x[0]+'\" value=\"'+esc(e[x[0]])+'\">'}).join(\"\")+'<label>Reservierungen automatisch bestätigen</label><select data-e=\"auto_bestaetigen\"><option value=\"1\"'+(e.auto_bestaetigen?\" selected\":\"\")+'>Ja</option><option value=\"0\"'+(e.auto_bestaetigen?\"\":\" selected\")+'>Nein, ich bestätige selbst</option></select><div style=\"margin-top:12px\"><button class=\"btn\" id=\"se\">Speichern</button></div></div>'));\n  m.appendChild($('<div class=\"card\"><b>Telegram-Benachrichtigung</b><small class=\"t\">Optional: neue Reservierungen und Bestellungen aufs Handy. Bot bei @BotFather erstellen, Token und deine Chat-ID eintragen.</small><label>Bot-Token</label><input id=\"tt\" placeholder=\"'+(e.telegramGesetzt?\"gespeichert (zum Ändern neu eintragen)\":\"123456:ABC…\")+'\"><label>Chat-ID</label><input id=\"tc\" value=\"'+esc(e.telegramChat)+'\"><div style=\"margin-top:12px\"><button class=\"btn g\" id=\"st\">Telegram speichern</button></div></div>'));\n  m.appendChild($('<div class=\"card\"><b>Für deine Gäste</b><label>Link zum Chat (Flyer, Tischkarte, Instagram, QR)</label><pre id=\"l1\"></pre><label>Eine Zeile für die Website</label><pre id=\"l2\"></pre><label>QR-Code</label><img alt=\"QR\" style=\"width:150px;height:150px;background:#fff;padding:6px;border-radius:6px\" src=\"https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=10&data='+encodeURIComponent(chat)+'\"></div>'));\n  document.getElementById(\"l1\").textContent=chat;document.getElementById(\"l2\").textContent=code;\n  document.getElementById(\"se\").onclick=function(){var b={};Array.prototype.forEach.call(m.querySelectorAll(\"[data-e]\"),function(i){b[i.getAttribute(\"data-e\")]=i.value});api(\"einstellungen\",b).then(function(){notiz=\"\";return laden()}).catch(function(x){alert(x.message)})};\n  document.getElementById(\"st\").onclick=function(){var b={telegramChat:document.getElementById(\"tc\").value};var t=document.getElementById(\"tt\").value.trim();if(t)b.telegramToken=t;api(\"einstellungen\",b).then(laden).catch(function(x){alert(x.message)})}}\ndocument.getElementById(\"ld\").onclick=laden;laden();\n</script></body></html>\n", "gast": "<!DOCTYPE html>\n<html lang=\"de\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">\n<title>Chat</title>\n<style>\n:root{--c:#1f2937;--t:#fff}*{box-sizing:border-box}html,body{height:100%;margin:0}\nbody{font:16px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;background:#f4f5f7;color:#111;display:flex;flex-direction:column}\nheader{background:var(--c);color:var(--t);padding:14px 16px;font-weight:700;font-size:17px}\nheader small{display:block;font-weight:400;opacity:.8;font-size:12.5px;margin-top:2px}\n#log{flex:1;overflow:auto;padding:14px 12px;display:flex;flex-direction:column;gap:9px}\n.m{max-width:86%;padding:10px 13px;border-radius:14px;white-space:pre-wrap;word-wrap:break-word}\n.b{background:#fff;border:1px solid #e3e5ea;align-self:flex-start;border-bottom-left-radius:4px}\n.u{background:var(--c);color:var(--t);align-self:flex-end;border-bottom-right-radius:4px}\n.w{opacity:.6;font-style:italic}\n#chips{display:flex;gap:8px;flex-wrap:wrap;padding:0 12px 8px}\n#chips button{border:1px solid #cfd3da;background:#fff;border-radius:99px;padding:8px 13px;font:inherit;font-size:14px;cursor:pointer}\nform{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));background:#fff;border-top:1px solid #e3e5ea}\ninput{flex:1;border:1px solid #cfd3da;border-radius:99px;padding:12px 15px;font:inherit;min-width:0}\nbutton.s{border:0;background:var(--c);color:var(--t);border-radius:99px;padding:0 20px;font:inherit;font-weight:700;cursor:pointer}\nbutton:disabled{opacity:.5}\n</style></head><body>\n<header><span id=\"n\"></span><small id=\"s\"></small></header>\n<div id=\"log\"></div><div id=\"chips\"></div>\n<form id=\"f\"><input id=\"i\" autocomplete=\"off\" placeholder=\"Ihre Nachricht…\" maxlength=\"800\"><button class=\"s\" id=\"b\">Senden</button></form>\n<script>\nvar B=/*BDATA*/null||{name:\"Chat\",greeting:\"Grüezi!\",farbe:\"#1f2937\",vorschlaege:[]};\nvar verlauf=[],log=document.getElementById(\"log\"),inp=document.getElementById(\"i\"),btn=document.getElementById(\"b\");\nfunction hell(h){var r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);return (r*299+g*587+b*114)/1000>150}\ndocument.documentElement.style.setProperty(\"--c\",B.farbe);document.documentElement.style.setProperty(\"--t\",hell(B.farbe)?\"#111\":\"#fff\");\ndocument.title=B.name;document.getElementById(\"n\").textContent=B.name;document.getElementById(\"s\").textContent=B.agent+\" · digitaler Assistent\";\nfunction add(t,k){var d=document.createElement(\"div\");d.className=\"m \"+k;d.textContent=t;log.appendChild(d);log.scrollTop=log.scrollHeight;return d}\nadd(B.greeting,\"b\");\nvar chips=document.getElementById(\"chips\");\n(B.vorschlaege||[]).forEach(function(t){var x=document.createElement(\"button\");x.type=\"button\";x.textContent=t;x.onclick=function(){senden(t)};chips.appendChild(x)});\nfunction senden(t){\n  t=(t||\"\").trim();if(!t||btn.disabled)return;chips.style.display=\"none\";\n  add(t,\"u\");verlauf.push({role:\"user\",content:t});inp.value=\"\";btn.disabled=true;\n  var w=add(\"…\",\"b w\");\n  fetch(location.pathname.replace(/\\/?$/,\"\"),{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({messages:verlauf.slice(-12)})})\n   .then(function(r){return r.json().catch(function(){return {}})})\n   .then(function(d){w.remove();var a=d&&d.text?d.text:(d&&d.error)||\"Da ist etwas schiefgelaufen. Bitte versuchen Sie es gleich nochmal.\";add(a,\"b\");verlauf.push({role:\"assistant\",content:a})})\n   .catch(function(){w.remove();add(\"Keine Verbindung. Bitte versuchen Sie es nochmal.\",\"b\")})\n   .then(function(){btn.disabled=false;inp.focus()});\n}\ndocument.getElementById(\"f\").onsubmit=function(e){e.preventDefault();senden(inp.value)};\n</script></body></html>\n", "embed": "(function(){\n  var s=document.currentScript;if(!s)return;\n  var base=s.src.replace(/\\/embed\\.js(\\?.*)?$/,\"\"),farbe=s.getAttribute(\"data-color\")||\"__FARBE__\";\n  var btn=document.createElement(\"button\"),fr=document.createElement(\"iframe\"),offen=false;\n  btn.setAttribute(\"aria-label\",\"Chat öffnen\");btn.innerHTML=\"&#128172;\";\n  btn.style.cssText=\"position:fixed;right:18px;bottom:18px;width:58px;height:58px;border-radius:50%;border:0;background:\"+farbe+\";color:#fff;font-size:26px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.3);z-index:2147483646\";\n  fr.title=\"Chat\";fr.src=\"about:blank\";\n  fr.style.cssText=\"position:fixed;right:18px;bottom:88px;width:min(380px,calc(100vw - 24px));height:min(600px,calc(100vh - 110px));border:0;border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.35);background:#fff;z-index:2147483647;display:none\";\n  btn.onclick=function(){offen=!offen;if(offen&&fr.src===\"about:blank\")fr.src=base+\"/chat\";fr.style.display=offen?\"block\":\"none\";btn.innerHTML=offen?\"&#10005;\":\"&#128172;\"};\n  document.body.appendChild(fr);document.body.appendChild(btn);\n})();\n"};
+/*SEITEN-ENDE*/
+
+/* ===========================================================
    SELBST-UPDATE: holt neue Versionen von GitHub, ohne Neustart.
    Alle 30 Minuten automatisch, oder per Knopf in der App.
    Pruefen -> tauschen -> bei Fehler sofort zurueck.
@@ -1561,7 +2094,7 @@ async function frageClaude(agent, messages) {
 }
 
 /* ---------- Anmelden: die neueste geladene Version uebernimmt ---------- */
-const KERN = { behandle, rotiere, aufgabe, update, weltUhr, _intern: { ANBIETER, WAHL, HAND, listen, pause, welt: { wTag, wZulassen, wAnsicht, wEinstellungen, wLaden, wSpeichern, wFirmaBauen, wGesellschaft, wSprechen, wProduktTexte, wPaketHtml, wProdukt, wBez, WJ } } };
+const KERN = { behandle, rotiere, aufgabe, update, weltUhr, _intern: { ANBIETER, WAHL, HAND, listen, pause, betrieb: { bNeu, bLaden, bWerkzeug, bAgent, bSystem, bSpeichern, bListe }, welt: { wTag, wZulassen, wAnsicht, wEinstellungen, wLaden, wSpeichern, wFirmaBauen, wGesellschaft, wSprechen, wProduktTexte, wPaketHtml, wProdukt, wBez, WJ } } };
 global.__nxApp = global.__nxApp || {};
 global.__nxApp.kern = KERN;
 global.__nxApp.version = VERSION;

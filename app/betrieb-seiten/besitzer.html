@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex"><title>Mein Betrieb</title>
+<style>
+:root{--bg:#0d0e14;--p:#161824;--l:#2a2d3e;--t:#eceef6;--m:#9a9fb8;--a:#9BFF3D;--r:#FF4D6D;--c:#22E0FF;--y:#FFD23F}
+*{box-sizing:border-box}html,body{margin:0}body{font:16px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--t);padding-bottom:84px}
+header{padding:16px;border-bottom:1px solid var(--l);display:flex;justify-content:space-between;align-items:center}
+header b{font-size:18px}header small{color:var(--m);display:block;font-size:12.5px}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--p);border-top:1px solid var(--l);padding-bottom:env(safe-area-inset-bottom);z-index:5}
+nav button{flex:1;background:none;border:0;color:var(--m);padding:11px 2px 9px;font:inherit;font-size:12px;cursor:pointer;position:relative}
+nav button span{display:block;font-size:21px}nav button.on{color:var(--a)}
+nav i{position:absolute;top:5px;right:22%;background:var(--r);color:#fff;border-radius:99px;font-style:normal;font-size:11px;padding:1px 6px}
+main{padding:14px;max-width:900px;margin:0 auto}
+.card{background:var(--p);border:1px solid var(--l);border-radius:8px;padding:13px;margin-bottom:10px}
+.btn{background:var(--a);color:#0d0e14;border:0;border-radius:6px;padding:11px 16px;font:inherit;font-weight:700;cursor:pointer}
+.btn.g{background:transparent;color:var(--t);border:1px solid var(--l)}.btn.r{background:var(--r);color:#fff}.btn.s{padding:7px 11px;font-size:14px}
+.btn:disabled{opacity:.5}
+input,textarea,select{width:100%;background:#0b0c12;color:var(--t);border:1px solid var(--l);border-radius:6px;padding:11px;font:inherit}
+label{display:block;color:var(--m);font-size:12.5px;margin:11px 0 4px;text-transform:uppercase;letter-spacing:.04em}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.chips button{background:var(--p);border:1px solid var(--l);color:var(--t);border-radius:99px;padding:8px 13px;font:inherit;font-size:14px;cursor:pointer}
+.chips button.on{border-color:var(--a);color:var(--a)}
+#chat{display:flex;flex-direction:column;gap:9px;min-height:40vh}
+.m{padding:10px 13px;border-radius:12px;white-space:pre-wrap;word-wrap:break-word;max-width:94%}
+.u{background:#243a1a;align-self:flex-end;border:1px solid #3a5a28}.b{background:var(--p);border:1px solid var(--l);align-self:flex-start}
+.w{opacity:.6}small.t{color:var(--m);display:block;margin-top:5px;font-size:12px}
+.row{display:flex;gap:8px}table{border-collapse:collapse;width:100%;font-size:14px}th,td{border-bottom:1px solid var(--l);padding:8px 7px;text-align:left;vertical-align:top}
+th{color:var(--m);font-weight:600;font-size:12px;text-transform:uppercase;position:sticky;top:0;background:var(--bg)}
+tr.low td{background:rgba(255,77,109,.14)}tr.sel td{background:rgba(155,255,61,.1)}tr{cursor:pointer}
+.sc{overflow:auto;max-height:55vh;border:1px solid var(--l);border-radius:8px}
+.msg{padding:11px 13px;border-radius:8px;margin-bottom:8px;background:var(--p);border:1px solid var(--l)}.msg.neu{border-color:var(--y)}
+.err{color:var(--r)}.ok{color:var(--a)}pre{white-space:pre-wrap;word-break:break-all;background:#0b0c12;border:1px solid var(--l);border-radius:6px;padding:10px;font-size:13px}
+</style></head><body>
+<header><div><b id="nm">Mein Betrieb</b><small id="sb"></small></div><button class="btn g s" id="ld">Aktualisieren</button></header>
+<main id="m"></main>
+<nav id="nv"></nav>
+<script>
+var ID=location.pathname.split("/").filter(Boolean)[1],TOK="";
+try{TOK=(location.hash.match(/t=([a-f0-9]+)/)||[])[1]||sessionStorage.getItem("bt-"+ID)||"";if(TOK)sessionStorage.setItem("bt-"+ID,TOK)}catch(e){}
+var D=null,tab="agent",tabelle="",auswahl=null,verlauf=[],busy=false,form=false,notiz="";
+var api=function(p,body){return fetch("/b/"+ID+"/api/"+p,{method:body?"POST":"GET",headers:{"x-token":TOK,"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json().then(function(d){if(!r.ok)throw new Error(d.error||("Fehler "+r.status));return d})})};
+var $=function(h){var d=document.createElement("div");d.innerHTML=h;return d.firstChild};
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
+function laden(){return api("daten").then(function(d){D=d;if(!tabelle||!D.tabellen[tabelle])tabelle=Object.keys(D.tabellen)[0];draw()}).catch(function(e){document.getElementById("m").innerHTML='<div class="card err">'+esc(e.message)+'<br><small class="t">Link prüfen: Er muss mit #t=… enden.</small></div>'})}
+function nav(){var ungel=D?D.inbox.filter(function(x){return !x.gelesen}).length:0;
+  document.getElementById("nv").innerHTML=[["agent","💬","Agent"],["daten","📋","Daten"],["post","📥","Post"],["einst","⚙️","Einstellungen"]].map(function(t){return '<button class="'+(tab===t[0]?"on":"")+'" data-t="'+t[0]+'"><span>'+t[1]+'</span>'+t[2]+(t[0]==="post"&&ungel?'<i>'+ungel+'</i>':'')+'</button>'}).join("");
+  Array.prototype.forEach.call(document.querySelectorAll("nav button"),function(b){b.onclick=function(){tab=b.getAttribute("data-t");form=false;auswahl=null;draw()}})}
+function draw(){if(!D)return;document.getElementById("nm").textContent=D.name;document.getElementById("sb").textContent=D.agentName+" · "+D.preset;nav();
+  var m=document.getElementById("m");m.innerHTML="";
+  if(tab==="agent")zAgent(m);else if(tab==="daten")zDaten(m);else if(tab==="post")zPost(m);else zEinst(m)}
+var SCH=["Prüf mein Lager: was ist unter Mindestmenge? Mach eine Einkaufsliste nach Lieferant.","Welche Reservierungen und Bestellungen sind heute und morgen offen? Ordne sie nach Uhrzeit.","Schreib mir einen Tagesbericht: Lager, Reservierungen, offene Bestellungen, Auffälligkeiten.","Was ist das Lager insgesamt wert, aufgeteilt nach Lieferant?"],SCHL=["📦 Lager prüfen","📅 Heute & morgen","📝 Tagesbericht","💰 Lagerwert"];
+function zAgent(m){
+  m.appendChild($('<div class="chips">'+SCH.map(function(t,i){return '<button data-i="'+i+'">'+SCHL[i]+'</button>'}).join("")+'</div>'));
+  Array.prototype.forEach.call(m.querySelectorAll(".chips button"),function(b){b.onclick=function(){senden(SCH[+b.getAttribute("data-i")])}});
+  var c=$('<div id="chat"></div>');m.appendChild(c);
+  if(!verlauf.length)c.appendChild($('<div class="m b">Hallo! Ich bin '+esc(D.agentName)+'. Ich kann dein Lager analysieren, Reservierungen und Bestellungen ordnen, Daten eintragen und Berichte schreiben. Du kannst mir auch Listen einfach hineinkopieren, ich trage sie ein.</div>'));
+  verlauf.forEach(function(v){var d=$('<div class="m '+(v.role==="user"?"u":"b")+'"></div>');d.textContent=v.content;c.appendChild(d);if(v.w&&v.w.length){var s=$('<small class="t"></small>');s.textContent="Werkzeuge: "+v.w.join(", ");d.appendChild(s)}});
+  var f=$('<div class="row" style="margin-top:12px"><textarea id="q" rows="2" placeholder="Frag oder befiehl etwas …"></textarea><button class="btn" id="sd">Senden</button></div>');m.appendChild(f);
+  document.getElementById("sd").onclick=function(){senden(document.getElementById("q").value)};
+  var q=document.getElementById("q");q.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();senden(q.value)}});
+  window.scrollTo(0,document.body.scrollHeight)}
+function senden(t){t=(t||"").trim();if(!t||busy)return;busy=true;verlauf.push({role:"user",content:t});draw();
+  var c=document.getElementById("chat");var w=$('<div class="m b w">Ich arbeite daran …</div>');c.appendChild(w);window.scrollTo(0,document.body.scrollHeight);
+  api("chat",{messages:verlauf.slice(-12).map(function(v){return {role:v.role,content:v.content}})}).then(function(d){verlauf.push({role:"assistant",content:d.text,w:d.werkzeuge});return laden()}).catch(function(e){verlauf.push({role:"assistant",content:"Fehler: "+e.message})}).then(function(){busy=false;draw()})}
+function sp(t){return t.spalten}
+function zDaten(m){
+  var ch=$('<div class="chips"></div>');Object.keys(D.tabellen).forEach(function(n){var t=D.tabellen[n],b=$('<button class="'+(n===tabelle?"on":"")+'">'+esc(t.label)+' ('+t.zeilen.length+')</button>');b.onclick=function(){tabelle=n;auswahl=null;form=false;draw()};ch.appendChild(b)});m.appendChild(ch);
+  var t=D.tabellen[tabelle];if(!t)return;
+  var bar=$('<div class="row" style="margin-bottom:10px;flex-wrap:wrap"></div>');
+  var b1=$('<button class="btn s">＋ Neue Zeile</button>');b1.onclick=function(){auswahl=null;form=true;draw()};
+  var b2=$('<button class="btn g s">Liste einfügen (CSV/Excel)</button>');b2.onclick=function(){form="import";draw()};
+  bar.appendChild(b1);bar.appendChild(b2);
+  var anz=t.zeilen.length===0&&D.demo?$('<button class="btn g s">Beispieldaten</button>'):null;if(anz){anz.onclick=function(){api("demo",{}).then(laden)};bar.appendChild(anz)}
+  m.appendChild(bar);
+  if(notiz){m.appendChild($('<div class="card '+(/^Fehler/.test(notiz)?"err":"ok")+'">'+esc(notiz)+'</div>'))}
+  if(form==="import"){var c=$('<div class="card"><label>Tabelle: Zeilen einfügen (eine pro Zeile, Spalten mit Tab, ; oder ,). Erste Zeile darf die Spaltennamen enthalten.</label><div style="color:var(--m);font-size:13px;margin-bottom:6px">Reihenfolge: '+esc(sp(t).map(function(s){return s.k}).join(" ; "))+'</div><textarea id="imp" rows="8"></textarea><div class="row" style="margin-top:10px"><button class="btn" id="go">Einfügen</button><button class="btn g" id="x">Abbrechen</button></div></div>');m.appendChild(c);
+    document.getElementById("x").onclick=function(){form=false;draw()};document.getElementById("go").onclick=function(){api("import",{tabelle:tabelle,text:document.getElementById("imp").value}).then(function(d){notiz=d.eingetragen+" Zeilen eingetragen.";form=false;return laden()}).catch(function(e){notiz="Fehler: "+e.message;draw()})};return}
+  if(form){var z=auswahl?t.zeilen.filter(function(r){return r.id===auswahl})[0]||{}:{};
+    var h='<div class="card"><b>'+(auswahl?"Zeile ändern":"Neue Zeile")+'</b>'+sp(t).map(function(s){return '<label>'+esc(s.l)+'</label><input data-k="'+esc(s.k)+'" value="'+esc(z[s.k]==null?"":z[s.k])+'" '+(s.t==="datum"?'placeholder="JJJJ-MM-TT"':s.t==="zeit"?'placeholder="HH:MM"':s.t==="zahl"?'inputmode="decimal"':'')+'>'}).join("")+'<div class="row" style="margin-top:12px"><button class="btn" id="sv">Speichern</button><button class="btn g" id="x">Abbrechen</button>'+(auswahl?'<button class="btn r" id="dl">Löschen</button>':'')+'</div></div>';
+    m.appendChild($(h));document.getElementById("x").onclick=function(){form=false;auswahl=null;draw()};
+    document.getElementById("sv").onclick=function(){var f={};Array.prototype.forEach.call(m.querySelectorAll("input[data-k]"),function(i){f[i.getAttribute("data-k")]=i.value});
+      api("zeile",{tabelle:tabelle,aktion:auswahl?"aendern":"neu",id:auswahl,felder:f}).then(function(){notiz="Gespeichert.";form=false;auswahl=null;return laden()}).catch(function(e){notiz="Fehler: "+e.message;draw()})};
+    if(auswahl)document.getElementById("dl").onclick=function(){if(confirm("Wirklich löschen?"))api("zeile",{tabelle:tabelle,aktion:"loeschen",id:auswahl}).then(function(){notiz="Gelöscht.";form=false;auswahl=null;return laden()}).catch(function(e){notiz="Fehler: "+e.message;draw()})};return}
+  if(!t.zeilen.length){m.appendChild($('<div class="card" style="color:var(--m)">Noch leer. Füge Zeilen hinzu, kopiere eine Liste hinein, oder sag es einfach dem Agenten im Tab «Agent».</div>'));return}
+  var hasMin=t.spalten.some(function(s){return s.k==="menge"})&&t.spalten.some(function(s){return s.k==="min"});
+  var tb='<div class="sc"><table><tr>'+sp(t).map(function(s){return '<th>'+esc(s.l)+'</th>'}).join("")+'</tr>'+t.zeilen.map(function(r){var low=hasMin&&r.min!==""&&Number(r.menge)<=Number(r.min);return '<tr class="'+(low?"low":"")+'" data-id="'+esc(r.id)+'">'+sp(t).map(function(s){return '<td>'+esc(r[s.k])+'</td>'}).join("")+'</tr>'}).join("")+'</table></div>'+(hasMin?'<small class="t">Rot = Menge unter Mindestmenge</small>':'');
+  m.appendChild($(tb));Array.prototype.forEach.call(m.querySelectorAll("tr[data-id]"),function(tr){tr.onclick=function(){auswahl=tr.getAttribute("data-id");form=true;draw()}})}
+function zPost(m){
+  var top=$('<div class="row" style="margin-bottom:10px"><button class="btn g s" id="al">Alle gelesen</button><button class="btn g s" id="lo">Leeren</button></div>');m.appendChild(top);
+  document.getElementById("al").onclick=function(){api("inbox",{aktion:"gelesen"}).then(laden)};document.getElementById("lo").onclick=function(){if(confirm("Posteingang leeren?"))api("inbox",{aktion:"leeren"}).then(laden)};
+  if(!D.inbox.length)m.appendChild($('<div class="card" style="color:var(--m)">Keine Nachrichten. Neue Reservierungen, Bestellungen und Anfragen deiner Gäste erscheinen hier.</div>'));
+  D.inbox.forEach(function(x){var d=$('<div class="msg '+(x.gelesen?"":"neu")+'"></div>');d.textContent=x.text;var s=$('<small class="t"></small>');s.textContent=new Date(x.zeit).toLocaleString("de-CH")+" · "+x.art;d.appendChild(s);m.appendChild(d)});
+  if(D.gespraeche.length){m.appendChild($('<label style="margin-top:20px">Was Gäste den Agenten gefragt haben</label>'));D.gespraeche.forEach(function(g){var d=$('<div class="msg"></div>');d.textContent="❓ "+g.frage+"\n💬 "+g.antwort;d.style.whiteSpace="pre-wrap";var s=$('<small class="t"></small>');s.textContent=new Date(g.zeit).toLocaleString("de-CH");d.appendChild(s);m.appendChild(d)})}}
+function zEinst(m){var e=D.einstellungen,o=location.origin,chat=o+"/b/"+ID+"/chat",code='<script src="'+o+'/b/'+ID+'/embed.js" async></'+'script>';
+  var f=[["name","Name des Betriebs"],["oeffnungszeiten","Öffnungszeiten (z.B. Di–Sa 11:30–14:00 und 17:30–23:00, So/Mo Ruhetag)"],["adresse","Adresse"],["telefon","Telefon"],["regeln","Hinweise für den Agenten (z.B. Hunde erlaubt, Gruppen ab 8 nur auf Anfrage)"],["kapazitaet","Plätze pro Zeitfenster (für Reservierungen)"],["dauer_min","Dauer einer Reservierung in Minuten"]];
+  m.appendChild($('<div class="card"><b>Betrieb</b>'+f.map(function(x){return '<label>'+esc(x[1])+'</label><input data-e="'+x[0]+'" value="'+esc(e[x[0]])+'">'}).join("")+'<label>Reservierungen automatisch bestätigen</label><select data-e="auto_bestaetigen"><option value="1"'+(e.auto_bestaetigen?" selected":"")+'>Ja</option><option value="0"'+(e.auto_bestaetigen?"":" selected")+'>Nein, ich bestätige selbst</option></select><div style="margin-top:12px"><button class="btn" id="se">Speichern</button></div></div>'));
+  m.appendChild($('<div class="card"><b>Telegram-Benachrichtigung</b><small class="t">Optional: neue Reservierungen und Bestellungen aufs Handy. Bot bei @BotFather erstellen, Token und deine Chat-ID eintragen.</small><label>Bot-Token</label><input id="tt" placeholder="'+(e.telegramGesetzt?"gespeichert (zum Ändern neu eintragen)":"123456:ABC…")+'"><label>Chat-ID</label><input id="tc" value="'+esc(e.telegramChat)+'"><div style="margin-top:12px"><button class="btn g" id="st">Telegram speichern</button></div></div>'));
+  m.appendChild($('<div class="card"><b>Für deine Gäste</b><label>Link zum Chat (Flyer, Tischkarte, Instagram, QR)</label><pre id="l1"></pre><label>Eine Zeile für die Website</label><pre id="l2"></pre><label>QR-Code</label><img alt="QR" style="width:150px;height:150px;background:#fff;padding:6px;border-radius:6px" src="https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=10&data='+encodeURIComponent(chat)+'"></div>'));
+  document.getElementById("l1").textContent=chat;document.getElementById("l2").textContent=code;
+  document.getElementById("se").onclick=function(){var b={};Array.prototype.forEach.call(m.querySelectorAll("[data-e]"),function(i){b[i.getAttribute("data-e")]=i.value});api("einstellungen",b).then(function(){notiz="";return laden()}).catch(function(x){alert(x.message)})};
+  document.getElementById("st").onclick=function(){var b={telegramChat:document.getElementById("tc").value};var t=document.getElementById("tt").value.trim();if(t)b.telegramToken=t;api("einstellungen",b).then(laden).catch(function(x){alert(x.message)})}}
+document.getElementById("ld").onclick=laden;laden();
+</script></body></html>
