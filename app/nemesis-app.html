@@ -5751,45 +5751,49 @@ function BetriebBox({ agent, upd }) {
   const PRESETS = [["restaurant", "🍽️ Restaurant"], ["shop", "🛍️ Shop"], ["dienstleister", "💼 Dienstleister"]];
   if (!b0) return (
     <>
-      <span className="lbl" style={{ marginTop: 22 }}>Betrieb &amp; Werkzeuge · der Agent arbeitet wirklich</span>
-      <div className="log">Damit kann der Agent beim Kunden nicht nur reden, sondern arbeiten: Lager analysieren, Reservierungen und Bestellungen ordnen, Listen eintragen, Berichte und Einkaufslisten. Der Kunde bekommt einen eigenen Bereich fürs Handy. Gäste chatten und reservieren direkt, ohne Zugriff auf Interna. Keine Schlüssel, keine Cloud beim Kunden.</div>
+      <span className="lbl" style={{ marginTop: 6 }}>📲 An den Kunden senden · mit 1 Link</span>
+      <div className="log">Damit kann der Agent beim Kunden nicht nur reden, sondern arbeiten: Lager analysieren, Reservierungen und Bestellungen ordnen, Listen eintragen, Berichte und Einkaufslisten. Der Kunde bekommt EINEN Link: damit hat er seinen Bereich fürs Handy (als eigene App installierbar), und seine Gäste bekommen eine fertige Mini-Webseite mit QR-Code, auch ohne eigene Website. Keine Schlüssel, keine Cloud beim Kunden.</div>
       <div className="seg" style={{ marginTop: 10 }}>{PRESETS.map(([k, lb]) => <button key={k} className={preset === k ? "on" : ""} style={{ fontSize: 11 }} onClick={() => setPreset(k)}>{lb}</button>)}</div>
       <span className="lbl">Name des Betriebs</span>
       <input value={name} onChange={(e) => setName(e.target.value)} />
       <div style={{ height: 12 }} />
-      <button className="btn tox" onClick={anlegen} disabled={busy || !name.trim()}>{busy ? "legt an …" : "Betrieb für diesen Kunden anlegen"}</button>
+      <button className="btn tox" onClick={anlegen} disabled={busy || !name.trim()}>{busy ? "macht fertig …" : "Für diesen Kunden fertig machen"}</button>
       {msg && <div className="log err" style={{ marginTop: 10 }}>{msg}</div>}
     </>
   );
   const besitzer = o + "/b/" + b0.id + "/#t=" + tok;
   const chat = o + "/b/" + b0.id + "/chat";
   const code = '<script src="' + o + '/b/' + b0.id + '/embed.js" async><' + '/script>';
-  const nachricht = "Grüezi\n\nIhr digitaler Assistent «" + agent.name + "» ist startklar und kann jetzt für Sie arbeiten.\n\n" +
-    "1) IHR BEREICH (nur für Sie, Link nicht weitergeben, am Handy zum Startbildschirm hinzufügen):\n" + besitzer + "\n" +
-    "Dort sagen Sie dem Assistenten zum Beispiel: «Prüf mein Lager und mach eine Einkaufsliste», «Welche Reservierungen habe ich heute?», «Trag ein: 10 kg Mehl, 5 l Rahm …». Sie sehen und ändern alle Daten auch von Hand (Tab «Daten»).\n\n" +
-    "2) FÜR IHRE GÄSTE:\nChat-Link (für Flyer, Tischkarten, Instagram, QR): " + chat + "\nOder diese eine Zeile auf Ihrer Website einfügen:\n" + code + "\n" +
-    "Gäste können Fragen stellen, Tische reservieren und bestellen. Neue Reservierungen und Bestellungen erscheinen bei Ihnen im Tab «Post» (optional auch per Telegram).\n\n" +
+  const nachricht = "Grüezi\n\nIhr digitaler Assistent «" + agent.name + "» ist startklar und kann für Sie arbeiten: Gäste beantworten und Tische reservieren, Ihr Lager prüfen, Bestellungen und Reservierungen ordnen.\n\n" +
+    "👉 Ihr persönlicher Link (nur für Sie, bitte nicht weitergeben):\n" + besitzer + "\n\n" +
+    "Öffnen Sie ihn am Handy und tippen Sie unten auf «Teilen»: Dort steht in einer Minute, wie Ihre Gäste den Assistenten bekommen (Link, QR-Code für den Tisch oder eine Zeile für Ihre Website). Mit «Zum Home-Bildschirm» haben Sie ihn als eigene App.\n\n" +
     "Freundliche Grüsse\nNemesis Studios";
   return (
     <>
-      <span className="lbl" style={{ marginTop: 22 }}>Betrieb &amp; Werkzeuge · {b0.name || name}</span>
-      <div className="log done">🟢 Läuft. Der Agent kann Lager, Reservierungen und Bestellungen dieses Kunden bearbeiten.</div>
-      <span className="lbl">A · Bereich des Kunden (geheimer Link, nur für ihn)</span>
-      <Deliverable text={besitzer} filename="mein-betrieb-link.txt" hint="Diesen Link bekommt nur der Inhaber. Darin: Agent-Chat, Daten, Post, Einstellungen." />
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "10px 0" }}>
-        <a className="btn tox sm" href={besitzer} target="_blank" rel="noopener">Besitzer-Bereich öffnen (Demo)</a>
-        <a className="btn ghost sm" href={chat} target="_blank" rel="noopener">Gast-Chat testen</a>
+      <span className="lbl" style={{ marginTop: 6 }}>📲 An den Kunden senden · {b0.name || name}</span>
+      <div className="log done">🟢 Fertig. Der Kunde braucht nur diesen einen Link. Darin: Agent-Chat, Daten, Post, und ein Tab «Teilen» für seine Gäste (Mini-Webseite, QR-Code, Website-Zeile). Eigene App per «Zum Home-Bildschirm».</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "12px 0" }}>
+        <a className="btn tox" href={"https://wa.me/?text=" + encodeURIComponent(nachricht)} target="_blank" rel="noopener">Per WhatsApp senden</a>
+        <a className="btn cy sm" href={"mailto:?subject=" + encodeURIComponent("Ihr digitaler Assistent «" + agent.name + "»") + "&body=" + encodeURIComponent(nachricht)}>Per E-Mail</a>
       </div>
-      <span className="lbl">B · Gast-Chat (öffentlich): Link und Website-Zeile</span>
-      <Deliverable text={chat} filename="gast-chat-link.txt" />
-      <Deliverable text={code} filename="gast-chat-code.txt" />
-      <img alt="QR-Code" style={{ width: 140, height: 140, background: "#fff", padding: 6, borderRadius: 6, margin: "10px 0" }} src={"https://api.qrserver.com/v1/create-qr-code/?size=500x500&margin=10&data=" + encodeURIComponent(chat)} />
-      <span className="lbl">C · Fertige Nachricht an den Kunden</span>
-      <Deliverable text={nachricht} filename="an-kunde-betrieb.txt" />
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
-        <button className="btn ghost sm" onClick={sync} disabled={busy}>{busy ? "…" : "Agent-Wissen aktualisieren"}</button>
+      <span className="lbl">Nachricht (alles drin, nur kopieren und senden)</span>
+      <Deliverable text={nachricht} filename="an-kunde.txt" hint="Der Link darin gehört nur dem Inhaber." />
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "12px 0" }}>
+        <a className="btn ghost sm" href={besitzer} target="_blank" rel="noopener">Kunden-Bereich ansehen</a>
+        <a className="btn ghost sm" href={chat} target="_blank" rel="noopener">Mini-Webseite der Gäste ansehen</a>
       </div>
-      <div className="log" style={{ marginTop: 10 }}>Nach Änderungen am Agenten einmal «Agent-Wissen aktualisieren». Die Daten des Kunden (Lager, Reservierungen …) bleiben dabei unberührt.</div>
+      <details style={{ marginTop: 10 }}>
+        <summary style={{ cursor: "pointer", padding: "10px 0", color: "var(--mut)" }}>Mehr: einzelne Links, QR-Code, Website-Zeile, Agent aktualisieren</summary>
+        <span className="lbl">Gäste-Link (Mini-Webseite mit Chat)</span>
+        <Deliverable text={chat} filename="gast-link.txt" />
+        <span className="lbl">Eine Zeile für die Website des Kunden</span>
+        <Deliverable text={code} filename="gast-code.txt" />
+        <img alt="QR-Code" style={{ width: 140, height: 140, background: "#fff", padding: 6, borderRadius: 6, margin: "10px 0" }} src={"https://api.qrserver.com/v1/create-qr-code/?size=500x500&margin=10&data=" + encodeURIComponent(chat)} />
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+          <button className="btn ghost sm" onClick={sync} disabled={busy}>{busy ? "…" : "Agent-Wissen aktualisieren"}</button>
+        </div>
+        <div className="log" style={{ marginTop: 10 }}>Nach Änderungen am Agenten einmal «Agent-Wissen aktualisieren». Die Daten des Kunden bleiben unberührt.</div>
+      </details>
       {msg && <div className={"log " + (/^Fehler/.test(msg) ? "err" : "done")} style={{ marginTop: 10 }}>{msg}</div>}
     </>
   );
@@ -5798,8 +5802,11 @@ function BetriebBox({ agent, upd }) {
 function KundePanel({ agent, agents, upd }) {
   return (
     <>
-      <KundePanelBasis agent={agent} agents={agents} upd={upd} />
       <BetriebBox agent={agent} upd={upd} />
+      <details style={{ marginTop: 22 }}>
+        <summary style={{ cursor: "pointer", padding: "10px 0", color: "var(--mut)" }}>Nur Chat ohne Werkzeuge (einfache Variante)</summary>
+        <KundePanelBasis agent={agent} agents={agents} upd={upd} />
+      </details>
     </>
   );
 }

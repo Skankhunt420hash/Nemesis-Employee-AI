@@ -47,3 +47,8 @@ In der App bei Agent → Kunde ⭐ → «Betrieb für diesen Kunden anlegen» (R
 - **Gast-Chat** `/b/<id>/chat` und `/b/<id>/embed.js` (eine Zeile für die Website): Gäste fragen, reservieren, bestellen. Gäste sehen nie Lager, Einkaufspreise oder fremde Daten.
 - **Werkzeuge des Agenten** (serverseitig, mit Rechteprüfung): lesen, rechnen (exakt), schreiben, ändern, löschen, Tabellen anlegen, Reservierung prüfen (Kapazität), benachrichtigen.
 Daten liegen in `sync-data/_betrieb-<id>.json`. Seiten-Quellen: `app/betrieb-seiten/`, eingebettet mit `python3 build/einbetten.py` (läuft in `build.sh`).
+
+## Betrieb: 1 Link, Mini-Webseite, eigene App
+- Kunde ohne Website: `/b/<id>/chat` ist eine Mini-Webseite (Anrufen, Route, Zeiten, Speisekarte, Chat) + QR + druckbare Tischkarte `/b/<id>/karte`.
+- Kunde mit Website: eine Zeile `<script src=".../b/<id>/embed.js">`.
+- Besitzer bekommt einen einzigen Link (`/b/<id>/#t=...`), Tab "Teilen". Jeder Betrieb ist als PWA installierbar (eigener Name, Farbe, Icon).
