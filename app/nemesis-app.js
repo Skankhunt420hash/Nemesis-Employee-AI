@@ -537,7 +537,7 @@ async function wLlm(raum, grund, system, user, opt) {
   if (grund === "auto" && w.verbrauch.aufrufe >= w.autopilot.maxAufrufeProTag)
     throw new Error("Tageslimit fuer KI-Aufrufe erreicht (" + w.autopilot.maxAufrufeProTag + "), es geht spaeter weiter");
   const r = await global.__nxApp.kern.rotiere({
-    system, messages: [{ role: "user", content: user }], max_tokens: opt.max || 2500,
+    system, messages: opt.messages || [{ role: "user", content: user }], max_tokens: opt.max || 2500,
     art: opt.art || "normal", nurFrei: !!w.autopilot.nurGratis,
   });
   w = wLaden(raum); wFenster(w);
@@ -864,6 +864,42 @@ function produktSeite(raum, id, res) {
                        "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" });
   res.end(wPaketHtml(f, html));
   return true;
+}
+
+/* ---------- Gespraech mit einem Bewohner (3D-Welt) ---------- */
+async function wSprechen(raum, body) {
+  const w0 = wLaden(raum), id = String(body.id || "");
+  const b = w0.bewohner[id], p = w0.profile[id];
+  if (!b || !p) throw new Error("Bewohner nicht gefunden");
+  const text = wKurz(body.text, 800);
+  if (!text) throw new Error("Leere Nachricht");
+  let msgs = (Array.isArray(body.verlauf) ? body.verlauf : []).slice(-8)
+    .filter((m) => m && (m.rolle === "ich" || m.rolle === "er") && typeof m.text === "string")
+    .map((m) => ({ role: m.rolle === "ich" ? "user" : "assistant", content: wKurz(m.text, 600) }));
+  while (msgs.length && msgs[0].role !== "user") msgs.shift();
+  msgs = msgs.filter((m, i) => i === 0 || m.role !== msgs[i - 1].role);
+  if (msgs.length && msgs[msgs.length - 1].role === "user") msgs.pop();
+  msgs.push({ role: "user", content: text });
+  const f = b.firmaId && w0.firmen[b.firmaId];
+  const mem = (b.erinnerungen || []).slice(0, 4).map((e) => "Tag " + e.tag + ": " + e.text).join(" | ");
+  const bez = Object.values(w0.beziehungen).filter((r) => (r.a === id || r.b === id) && w0.profile[r.a] && w0.profile[r.b] && Math.abs(r.wert) >= 15)
+    .sort((x, y) => Math.abs(y.wert) - Math.abs(x.wert)).slice(0, 4)
+    .map((r) => w0.profile[r.a === id ? r.b : r.a].name + " (" + r.art + ")").join(", ");
+  const system = `Du bist ${p.name}, ein Bewohner einer kleinen Welt aus KI-Wesen, und stehst gerade in der Stadt. Vor dir steht der Mensch, der diese Welt erschaffen hat ("der Chef"). Antworte als diese Figur, in der Ich-Form, auf Deutsch, hoechstens 3 Saetze, lebendig und passend zu deinem Charakter. Bleib in der Rolle, erfinde keine Technik-Erklaerungen ueber KI.
+Du: ${p.funktion || p.branche || "Bewohner"}${p.mission ? "; Auftrag: " + p.mission : ""}; Eigenart: ${b.eigenart}; Aussehen: ${b.aussehen || "-"}; Stimmung: ${b.stimmung}.
+Charakter (0-100): ${W_EIGENSCHAFTEN.map((k) => k + " " + b.charakter[k]).join(", ")}. Lebensziel: ${b.ziel || "keins"}.
+Zuhause: ${b.haus} (Stufe ${b.hausStufe}); Vermoegen: ${b.geld} Taler; Unternehmen: ${f ? f.name + " (" + f.idee + ", Software v" + f.version + ")" : "keines"}.
+Erinnerungen: ${mem || "keine besonderen"}. Beziehungen: ${bez || "keine engen"}.
+Stadt: Tag ${w0.tag}. ${wStadtText(w0)}.`;
+  const r = await wLlm(raum, "hand", system, "", { messages: msgs, max: 400 });
+  const antwort = wKurz(r.text, 900) || "…";
+  const w = wLaden(raum), b2 = w.bewohner[id];
+  if (b2 && !(b2.erinnerungen[0] && b2.erinnerungen[0].besuch === w.tag)) {
+    b2.erinnerungen.unshift({ tag: w.tag, besuch: w.tag, text: "Der Chef kam vorbei und sprach mit mir ueber: " + wKurz(text, 70) });
+    b2.erinnerungen.length = Math.min(b2.erinnerungen.length, 8);
+    wSpeichern(w);
+  }
+  return { ok: true, text: antwort, wer: p.name };
 }
 
 /* ---------- Bewohner erschaffen ---------- */
@@ -1352,6 +1388,12 @@ async function weltRouten(p, req, res, url, CORS) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Disposition": 'attachment; filename="' + fid + '-verkaufsseite.html"', "Cache-Control": "no-store", ...CORS });
     res.end(wPaketHtml(w.firmen[fid], html)); return true;
   }
+  if (p === "/welt/sprechen" && POST) {
+    const b = await lesBody(64 * 1024); if (!b) { json(res, 400, { error: "Kein gueltiges JSON" }, CORS); return true; }
+    try { json(res, 200, await wSprechen(raum, b), CORS); }
+    catch (e) { json(res, 502, { error: e.message }, CORS); }
+    return true;
+  }
   if (p === "/welt/export" && !POST) {
     const w = wLaden(raum), apps = {};
     for (const id of Object.keys(w.firmen)) { const h = wAppLesen(raum, id); if (h) apps[id] = h; }
@@ -1519,7 +1561,7 @@ async function frageClaude(agent, messages) {
 }
 
 /* ---------- Anmelden: die neueste geladene Version uebernimmt ---------- */
-const KERN = { behandle, rotiere, aufgabe, update, weltUhr, _intern: { ANBIETER, WAHL, HAND, listen, pause, welt: { wTag, wZulassen, wAnsicht, wEinstellungen, wLaden, wSpeichern, wFirmaBauen, wGesellschaft, wProduktTexte, wPaketHtml, wProdukt, wBez, WJ } } };
+const KERN = { behandle, rotiere, aufgabe, update, weltUhr, _intern: { ANBIETER, WAHL, HAND, listen, pause, welt: { wTag, wZulassen, wAnsicht, wEinstellungen, wLaden, wSpeichern, wFirmaBauen, wGesellschaft, wSprechen, wProduktTexte, wPaketHtml, wProdukt, wBez, WJ } } };
 global.__nxApp = global.__nxApp || {};
 global.__nxApp.kern = KERN;
 global.__nxApp.version = VERSION;

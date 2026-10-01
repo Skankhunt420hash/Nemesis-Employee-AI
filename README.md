@@ -39,3 +39,4 @@ Kosten-Bremsen: max. Tage und KI-Aufrufe pro 24 Std, optional nur Gratis-Modelle
 - **Beziehungen & Charakter:** Freunde, Rivalen, Partner; fünf Charakterwerte, Lebensziel und Erinnerungen pro Bewohner.
 - **Karte:** Stadtplan mit Zeitraffer (Tab «Karte»).
 - **Firma → Produkt:** «Als Produkt anbieten» erzeugt eine öffentliche Verkaufsseite `/p/<raum>/<firma>` mit Live-Demo, Preis, Kontakt, Einbett-Code und Datei-Download.
+- **3D-Welt (Tab «3D»):** begehbare Stadt im Browser (Three.js). Kreis links = gehen, Wischen = umschauen, Figuren/Häuser/Firmen antippen. Mit Bewohnern reden: Antworten kommen im Charakter der Figur, mit ihren Erinnerungen (`/welt/sprechen`).
