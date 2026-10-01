@@ -52,3 +52,9 @@ Daten liegen in `sync-data/_betrieb-<id>.json`. Seiten-Quellen: `app/betrieb-sei
 - Kunde ohne Website: `/b/<id>/chat` ist eine Mini-Webseite (Anrufen, Route, Zeiten, Speisekarte, Chat) + QR + druckbare Tischkarte `/b/<id>/karte`.
 - Kunde mit Website: eine Zeile `<script src=".../b/<id>/embed.js">`.
 - Besitzer bekommt einen einzigen Link (`/b/<id>/#t=...`), Tab "Teilen". Jeder Betrieb ist als PWA installierbar (eigener Name, Farbe, Icon).
+
+## Code-Schmiede 2.0 (Voll-Apps)
+- Beschreibung -> Plan (Tabellen/Felder/Login) -> Oberflaeche (index.html, style.css, app.js) -> optional `logic.js` -> Selbstpruefung (Syntax, IDs, Tabellennamen; Modell repariert selbst) -> Deploy auf den eigenen Server.
+- Laufzeit `app/laufzeit/runtime.js` (keine Abhaengigkeiten): REST-API pro Tabelle, Login (scrypt, Sitzungen), Besitzer-Filter, Validierung, JSON-Datenbank, Static-Hosting. Wird per `build/einbetten.py` in `nemesis-app.js` und `nemesis-app.html` eingebettet; dieselbe Datei ist im ZIP als `server.js`.
+- Hosting: `/x/<name>/` (oeffentlich, CSP-Sandbox), privat `/apps/deploy|liste|loeschen|export`. Vor dem Livegang laeuft ein echter Probelauf (CRUD je Tabelle, Login, Frontend); schlaegt er fehl, bleibt die alte Version live. Daten bleiben bei Updates erhalten. `logic.js` laeuft in einer vm-Sandbox (nur `ctx.db`).
+- Rausgeben: Link/QR, ZIP (`node server.js`, Dockerfile, README), Android-APK ueber GitHub Actions (Capacitor, ein Commit per Git-Data-API, Release mit `app-debug.apk`).

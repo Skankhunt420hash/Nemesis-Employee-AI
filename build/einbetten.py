@@ -12,3 +12,16 @@ else:
     sys.exit("Marker fehlt")
 open(js, "w", encoding="utf8").write(s)
 print("Seiten eingebettet:", len(block), "Bytes")
+
+# Laufzeit (app/laufzeit/runtime.js) in nemesis-app.js und nemesis-app.html einbetten
+lz = re.sub(r"^#!.*\n", "", open(os.path.join(r, "app", "laufzeit", "runtime.js"), encoding="utf8").read())
+def einsetzen(datei, vorlage):
+    t = open(datei, encoding="utf8").read()
+    if "/*LZ-START*/" not in t:
+        sys.exit("LZ-Marker fehlt in " + datei)
+    blk = "/*LZ-START*/\n" + vorlage + "\n/*LZ-ENDE*/"
+    t = re.sub(r"/\*LZ-START\*/.*?/\*LZ-ENDE\*/", lambda m: blk, t, flags=re.S)
+    open(datei, "w", encoding="utf8").write(t)
+einsetzen(js, "const APP_LAUFZEIT = " + json.dumps(lz, ensure_ascii=False) + ";")
+einsetzen(os.path.join(r, "app", "nemesis-app.html"), "const LAUFZEIT_SRC = " + json.dumps(lz.replace("</", "<\\/"), ensure_ascii=False) + ";")
+print("Laufzeit eingebettet:", len(lz), "Bytes")

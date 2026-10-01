@@ -2937,7 +2937,7 @@ const TOOLS = [
   { id: "promptarch", n: "Prompt Architect", d: "Analysiert den System-Prompt, zeigt Schwächen und Score, liefert eine verbesserte Version.", ic: "✎" },
   { id: "repair", n: "Agent Repair", d: "Vollständige Diagnose: Gesundheits-Score, kritische Probleme, automatische Reparatur.", ic: "⚕" },
   { id: "marketplace", n: "Agent Marketplace", d: "Agenten exportieren, importieren und aus fertigen Templates starten.", ic: "⇄" },
-  { id: "codeforge", n: "Code-Schmiede", d: "Beschreib eine App — der Agent baut sie wirklich. Lauffähige Web-App, Live-Vorschau, zum Herunterladen.", ic: "◐" },
+  { id: "codeforge", n: "Code-Schmiede", d: "Beschreib eine App — der Agent baut sie wirklich: Server, Datenbank, Login, Oberfläche. Läuft live auf deinem Server, als ZIP oder als Android-App.", ic: "◐" },
   { id: "wipe", n: "Totalreset", d: "Löscht alles im Labor. Kein Zurück.", ic: "✖", danger: true },
 ];
 
@@ -5027,8 +5027,804 @@ function AgentMarketplace({ agents, models, add }) {
   );
 }
 
-/* ---------------- CODE-SCHMIEDE (baut echte Web-Apps aus Text) ---------------- */
+/*LZ-START*/
+const LAUFZEIT_SRC = "/* Nemesis App-Laufzeit — ein Server ohne Abhaengigkeiten.\n   Liest app.spec.json (+ optional logic.js, public/) und liefert: REST-API, Login, Datenspeicher, Frontend.\n   Standalone:  node server.js      (PORT, DATA_DIR optional)\n   Eingebettet: createApp({dir, spec, logic, cors}) -> async handler(req, res, pfad)  */\n\"use strict\";\nconst fs = require(\"fs\");\nconst path = require(\"path\");\nconst crypto = require(\"crypto\");\nconst vm = require(\"vm\");\n\nconst MIME = { \".html\": \"text/html; charset=utf-8\", \".js\": \"text/javascript; charset=utf-8\", \".css\": \"text/css; charset=utf-8\",\n  \".json\": \"application/json; charset=utf-8\", \".svg\": \"image/svg+xml\", \".png\": \"image/png\", \".jpg\": \"image/jpeg\", \".jpeg\": \"image/jpeg\",\n  \".webp\": \"image/webp\", \".gif\": \"image/gif\", \".ico\": \"image/x-icon\", \".txt\": \"text/plain; charset=utf-8\", \".webmanifest\": \"application/manifest+json\",\n  \".woff2\": \"font/woff2\", \".woff\": \"font/woff\", \".mp3\": \"audio/mpeg\", \".mp4\": \"video/mp4\" };\nconst TYPEN = [\"text\", \"longtext\", \"number\", \"bool\", \"date\", \"select\", \"email\", \"url\"];\nconst slug = (s) => String(s || \"\").toLowerCase().normalize(\"NFD\").replace(/[̀-ͯ]/g, \"\").replace(/ß/g, \"ss\").replace(/[^a-z0-9]+/g, \"_\").replace(/^_+|_+$/g, \"\").slice(0, 40);\n\n/* ---------- Spezifikation pruefen / normalisieren ---------- */\nfunction normSpec(spec) {\n  if (!spec || typeof spec !== \"object\") throw new Error(\"Spezifikation fehlt\");\n  const out = { name: String(spec.name || \"App\").slice(0, 60), auth: !!spec.auth, entities: [] };\n  const seen = new Set();\n  for (const e of Array.isArray(spec.entities) ? spec.entities : []) {\n    const name = slug(e.name);\n    if (!name || seen.has(name)) continue;\n    seen.add(name);\n    const plural = slug(e.plural) || (name.endsWith(\"s\") ? name : name + \"s\");\n    const fields = [], fs_ = new Set();\n    for (const f of Array.isArray(e.fields) ? e.fields : []) {\n      const fn = slug(f.name);\n      if (!fn || fs_.has(fn) || [\"id\", \"created\", \"updated\", \"owner\"].includes(fn)) continue;\n      fs_.add(fn);\n      const typ = TYPEN.includes(f.type) ? f.type : \"text\";\n      fields.push({ name: fn, type: typ, required: !!f.required,\n        options: typ === \"select\" ? (Array.isArray(f.options) ? f.options.map(String).slice(0, 40) : []) : undefined,\n        default: f.default });\n    }\n    out.entities.push({ name, plural, fields, owner: out.auth && e.owner !== false, publicRead: !!e.publicRead });\n  }\n  const plurals = new Set();\n  for (const e of out.entities) { if (plurals.has(e.plural) || e.plural === \"auth\" || e.plural === \"health\" || e.plural === \"spec\") e.plural += \"_liste\"; plurals.add(e.plural); }\n  return out;\n}\n\n/* ---------- Datenspeicher: eine JSON-Datei, atomar geschrieben ---------- */\nfunction speicher(datei) {\n  let db = { users: [], sessions: [], tabellen: {}, zaehler: {} };\n  try { db = Object.assign(db, JSON.parse(fs.readFileSync(datei, \"utf8\"))); } catch (e) {}\n  let timer = null, schreibt = false, nochmal = false;\n  const sichern = () => {\n    if (timer) return;\n    timer = setTimeout(async () => {\n      timer = null;\n      if (schreibt) { nochmal = true; return; }\n      schreibt = true;\n      try {\n        fs.mkdirSync(path.dirname(datei), { recursive: true });\n        const tmp = datei + \".tmp\";\n        await fs.promises.writeFile(tmp, JSON.stringify(db));\n        await fs.promises.rename(tmp, datei);\n      } catch (e) { console.warn(\"[app-laufzeit] speichern: \" + e.message); }\n      schreibt = false;\n      if (nochmal) { nochmal = false; sichern(); }\n    }, 150);\n  };\n  const jetzt = () => {\n    if (timer) { clearTimeout(timer); timer = null; }\n    try { fs.mkdirSync(path.dirname(datei), { recursive: true }); fs.writeFileSync(datei + \".tmp\", JSON.stringify(db)); fs.renameSync(datei + \".tmp\", datei); } catch (e) {}\n  };\n  return { db, sichern, jetzt };\n}\n\n/* ---------- Wertepruefung ---------- */\nfunction pruefe(entity, body, vorhanden) {\n  const out = {}, fehler = [];\n  for (const f of entity.fields) {\n    let v = body[f.name];\n    const fehlt = v === undefined || v === null || v === \"\";\n    if (fehlt) {\n      if (vorhanden && body[f.name] === undefined) continue;\n      if (f.required && f.type !== \"bool\") { fehler.push(f.name + \" fehlt\"); continue; }\n      if (f.default !== undefined && !vorhanden) out[f.name] = f.default;\n      else if (f.type === \"bool\") out[f.name] = false;\n      else if (body[f.name] === null || body[f.name] === \"\") out[f.name] = f.type === \"number\" ? null : \"\";\n      continue;\n    }\n    if (f.type === \"number\") { v = Number(String(v).replace(\",\", \".\")); if (!isFinite(v)) { fehler.push(f.name + \" ist keine Zahl\"); continue; } }\n    else if (f.type === \"bool\") v = v === true || v === \"true\" || v === 1 || v === \"1\" || v === \"on\";\n    else {\n      v = String(v);\n      if (v.length > (f.type === \"longtext\" ? 20000 : 1000)) { fehler.push(f.name + \" zu lang\"); continue; }\n      if (f.type === \"select\" && f.options && f.options.length && !f.options.includes(v)) { fehler.push(f.name + \": ungueltige Auswahl\"); continue; }\n      if (f.type === \"email\" && !/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(v)) { fehler.push(f.name + \": keine gueltige E-Mail\"); continue; }\n      if (f.type === \"url\" && !/^https?:\\/\\//i.test(v)) { fehler.push(f.name + \": URL muss mit http(s):// beginnen\"); continue; }\n      if (f.type === \"date\" && isNaN(Date.parse(v))) { fehler.push(f.name + \": kein Datum\"); continue; }\n    }\n    out[f.name] = v;\n  }\n  return { out, fehler };\n}\n\n/* ---------- Passwoerter ---------- */\nconst hashPw = (pw, salt) => { salt = salt || crypto.randomBytes(16).toString(\"hex\"); return salt + \":\" + crypto.scryptSync(String(pw), salt, 32).toString(\"hex\"); };\nconst pwOk = (pw, h) => { try { const [s, x] = String(h).split(\":\"); const y = hashPw(pw, s).split(\":\")[1]; return crypto.timingSafeEqual(Buffer.from(x, \"hex\"), Buffer.from(y, \"hex\")); } catch (e) { return false; } };\n\n/* ---------- Die App ---------- */\nfunction createApp(opt) {\n  const spec = normSpec(opt.spec);\n  const dir = opt.dir;\n  const st = speicher(path.join(opt.dataDir || dir, \"daten.json\"));\n  const db = st.db;\n  const publicDir = path.join(dir, \"public\");\n  const cors = !!opt.cors;\n  const ents = Object.fromEntries(spec.entities.map((e) => [e.plural, e]));\n  for (const e of spec.entities) { db.tabellen[e.plural] = db.tabellen[e.plural] || []; db.zaehler[e.plural] = db.zaehler[e.plural] || 0; }\n  const bremse = new Map();\n  const zuViel = (key, max, fenster) => {\n    const n = Date.now(), l = (bremse.get(key) || []).filter((t) => n - t < fenster);\n    if (l.length >= max) { bremse.set(key, l); return true; }\n    l.push(n); bremse.set(key, l); return false;\n  };\n  setInterval(() => { const n = Date.now(); for (const [k, v] of bremse) if (!v.some((t) => n - t < 600000)) bremse.delete(k); }, 300000).unref();\n\n  /* eigene Logik in einer Sandbox (vm): nur db-Zugriff, kein require/fs/Netz */\n  const routen = [];\n  let logikFehler = \"\";\n  if (opt.logic && String(opt.logic).trim()) {\n    try {\n      const mod = { exports: {} };\n      const sandbox = { module: mod, exports: mod.exports, console: { log() {}, warn() {}, error() {} }, Math, Date, JSON, Number, String, Array, Object, Boolean, parseInt, parseFloat, isNaN, isFinite, RegExp, Map, Set, Intl };\n      vm.createContext(sandbox);\n      vm.runInContext(String(opt.logic), sandbox, { timeout: 1000, filename: \"logic.js\" });\n      const r = (mod.exports && mod.exports.routes) || {};\n      for (const k of Object.keys(r)) {\n        const m = k.match(/^(GET|POST|PUT|DELETE)\\s+(\\/api\\/[A-Za-z0-9_\\-\\/:]+)$/);\n        if (!m || typeof r[k] !== \"function\") continue;\n        routen.push({ methode: m[1], teile: m[2].split(\"/\").filter(Boolean), fn: r[k], sandbox });\n      }\n    } catch (e) { logikFehler = e.message; }\n  }\n  const tabelle = (plural) => db.tabellen[plural] || (db.tabellen[plural] = []);\n  const dbApi = (user) => ({\n    list: (plural, filter) => tabelle(plural).filter((r) => !filter || Object.keys(filter).every((k) => r[k] === filter[k])).map((r) => JSON.parse(JSON.stringify(r))),\n    get: (plural, id) => { const r = tabelle(plural).find((x) => x.id === Number(id)); return r ? JSON.parse(JSON.stringify(r)) : null; },\n    insert: (plural, obj) => {\n      const e = ents[plural]; if (!e) throw new Error(\"Unbekannte Tabelle \" + plural);\n      const { out, fehler } = pruefe(e, obj || {}, false); if (fehler.length) throw new Error(fehler.join(\", \"));\n      const r = Object.assign({ id: ++db.zaehler[plural], created: new Date().toISOString(), updated: new Date().toISOString() }, out);\n      if (e.owner && user) r.owner = user.id;\n      tabelle(plural).push(r); st.sichern(); return JSON.parse(JSON.stringify(r));\n    },\n    update: (plural, id, obj) => {\n      const e = ents[plural]; const r = tabelle(plural).find((x) => x.id === Number(id)); if (!e || !r) return null;\n      const { out, fehler } = pruefe(e, obj || {}, true); if (fehler.length) throw new Error(fehler.join(\", \"));\n      Object.assign(r, out, { updated: new Date().toISOString() }); st.sichern(); return JSON.parse(JSON.stringify(r));\n    },\n    remove: (plural, id) => { const t = tabelle(plural), i = t.findIndex((x) => x.id === Number(id)); if (i < 0) return false; t.splice(i, 1); st.sichern(); return true; },\n  });\n\n  const sende = (res, code, obj, extra) => {\n    const b = JSON.stringify(obj);\n    res.writeHead(code, Object.assign({ \"Content-Type\": \"application/json; charset=utf-8\", \"Cache-Control\": \"no-store\", \"X-Content-Type-Options\": \"nosniff\" }, cors ? CORS : {}, extra || {}));\n    res.end(b);\n  };\n  const CORS = { \"Access-Control-Allow-Origin\": \"*\", \"Access-Control-Allow-Headers\": \"Content-Type, Authorization\", \"Access-Control-Allow-Methods\": \"GET, POST, PUT, DELETE, OPTIONS\", \"Access-Control-Max-Age\": \"86400\" };\n  const lies = (req) => new Promise((ok, nein) => {\n    let n = 0; const teile = [];\n    req.on(\"data\", (c) => { n += c.length; if (n > 1048576) { nein(Object.assign(new Error(\"Anfrage zu gross\"), { code: 413 })); req.destroy(); } else teile.push(c); });\n    req.on(\"end\", () => {\n      if (!n) return ok({});\n      try { const o = JSON.parse(Buffer.concat(teile).toString(\"utf8\")); ok(o && typeof o === \"object\" ? o : {}); }\n      catch (e) { nein(Object.assign(new Error(\"Ungueltiges JSON\"), { code: 400 })); }\n    });\n    req.on(\"error\", nein);\n  });\n  const userVon = (req) => {\n    const h = String(req.headers.authorization || \"\");\n    const t = h.startsWith(\"Bearer \") ? h.slice(7) : \"\";\n    if (!t) return null;\n    const hash = crypto.createHash(\"sha256\").update(t).digest(\"hex\");\n    const s = db.sessions.find((x) => x.h === hash && x.bis > Date.now());\n    return s ? db.users.find((u) => u.id === s.user) || null : null;\n  };\n  const oeff = (u) => u && { id: u.id, name: u.name, email: u.email, admin: !!u.admin };\n  const neueSitzung = (u) => {\n    const t = crypto.randomBytes(32).toString(\"hex\");\n    db.sessions = db.sessions.filter((x) => x.bis > Date.now()).slice(-500);\n    db.sessions.push({ h: crypto.createHash(\"sha256\").update(t).digest(\"hex\"), user: u.id, bis: Date.now() + 30 * 86400000 });\n    st.sichern(); return t;\n  };\n\n  async function api(req, res, teile, url) {\n    const M = req.method;\n    const ip = String(req.socket && req.socket.remoteAddress || \"\");\n    if (M === \"OPTIONS\") { res.writeHead(204, cors ? CORS : {}); return res.end(); }\n    if (teile[1] === \"health\") return sende(res, 200, { ok: true, name: spec.name, logik: !logikFehler, logikFehler: logikFehler || undefined });\n    if (teile[1] === \"spec\") return sende(res, 200, { name: spec.name, auth: spec.auth, entities: spec.entities });\n    const user = userVon(req);\n\n    if (teile[1] === \"auth\") {\n      if (!spec.auth) return sende(res, 404, { error: \"Diese App hat keinen Login\" });\n      if (teile[2] === \"me\" && M === \"GET\") return user ? sende(res, 200, { user: oeff(user) }) : sende(res, 401, { error: \"Nicht angemeldet\" });\n      if (teile[2] === \"logout\" && M === \"POST\") {\n        const t = String(req.headers.authorization || \"\").slice(7);\n        if (t) { const h = crypto.createHash(\"sha256\").update(t).digest(\"hex\"); db.sessions = db.sessions.filter((x) => x.h !== h); st.sichern(); }\n        return sende(res, 200, { ok: true });\n      }\n      if ((teile[2] === \"register\" || teile[2] === \"login\") && M === \"POST\") {\n        if (zuViel(\"auth:\" + ip, 20, 600000)) return sende(res, 429, { error: \"Zu viele Versuche, kurz warten\" });\n        const b = await lies(req);\n        const email = String(b.email || \"\").trim().toLowerCase(), pw = String(b.password || \"\");\n        if (teile[2] === \"register\") {\n          if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email)) return sende(res, 400, { error: \"Ungueltige E-Mail\" });\n          if (pw.length < 6) return sende(res, 400, { error: \"Passwort: mindestens 6 Zeichen\" });\n          if (db.users.length >= 5000) return sende(res, 400, { error: \"Registrierung geschlossen\" });\n          if (db.users.some((u) => u.email === email)) return sende(res, 409, { error: \"E-Mail ist schon registriert\" });\n          const u = { id: (db.users.reduce((m, x) => Math.max(m, x.id), 0)) + 1, email, name: String(b.name || email.split(\"@\")[0]).slice(0, 60), pw: hashPw(pw), admin: db.users.length === 0, created: new Date().toISOString() };\n          db.users.push(u); st.sichern();\n          return sende(res, 201, { token: neueSitzung(u), user: oeff(u) });\n        }\n        const u = db.users.find((x) => x.email === email);\n        if (!u || !pwOk(pw, u.pw)) return sende(res, 401, { error: \"E-Mail oder Passwort falsch\" });\n        return sende(res, 200, { token: neueSitzung(u), user: oeff(u) });\n      }\n      return sende(res, 404, { error: \"Unbekannt\" });\n    }\n\n    // eigene Routen zuerst\n    for (const r of routen) {\n      if (r.methode !== M || r.teile.length !== teile.length) continue;\n      const params = {}; let passt = true;\n      r.teile.forEach((t, i) => { if (t.startsWith(\":\")) params[t.slice(1)] = decodeURIComponent(teile[i]); else if (t !== teile[i]) passt = false; });\n      if (!passt) continue;\n      if (spec.auth && !user && !(r.fn.oeffentlich)) return sende(res, 401, { error: \"Bitte anmelden\" });\n      const body = M === \"GET\" || M === \"DELETE\" ? {} : await lies(req);\n      const query = Object.fromEntries(url.searchParams);\n      r.sandbox.__ctx = { body, query, params, user: oeff(user), db: dbApi(user) };\n      r.sandbox.__fn = r.fn;\n      try {\n        const erg = vm.runInContext(\"__fn(__ctx)\", r.sandbox, { timeout: 1500 });\n        const wert = erg && typeof erg.then === \"function\" ? await Promise.race([erg, new Promise((_, no) => setTimeout(() => no(new Error(\"Zeitueberschreitung\")), 3000))]) : erg;\n        return sende(res, 200, wert === undefined ? { ok: true } : wert);\n      } catch (e) { return sende(res, 400, { error: String(e.message || e).slice(0, 300) }); }\n    }\n\n    const e = ents[teile[1]];\n    if (!e) return sende(res, 404, { error: \"Unbekannte Ressource\" });\n    const lesen = M === \"GET\", id = teile[2] !== undefined ? Number(teile[2]) : null;\n    if (spec.auth && !user && !(lesen && e.publicRead)) return sende(res, 401, { error: \"Bitte anmelden\" });\n    const eigene = (r) => !e.owner || !user || user.admin || r.owner === user.id || (lesen && e.publicRead);\n    const t = tabelle(e.plural);\n\n    if (teile.length === 2 && lesen) {\n      let liste = t.filter(eigene);\n      for (const f of e.fields) { const v = url.searchParams.get(f.name); if (v !== null && v !== \"\") liste = liste.filter((r) => String(r[f.name]) === v); }\n      const q = (url.searchParams.get(\"q\") || \"\").toLowerCase();\n      if (q) liste = liste.filter((r) => e.fields.some((f) => String(r[f.name] == null ? \"\" : r[f.name]).toLowerCase().includes(q)));\n      const sort = url.searchParams.get(\"sort\") || \"-id\", desc = sort[0] === \"-\", sf = sort.replace(/^-/, \"\");\n      if (sf === \"id\" || sf === \"created\" || sf === \"updated\" || e.fields.some((f) => f.name === sf))\n        liste = liste.slice().sort((a, b) => { const x = a[sf], y = b[sf]; return (x > y ? 1 : x < y ? -1 : 0) * (desc ? -1 : 1); });\n      const gesamt = liste.length, off = Math.max(0, parseInt(url.searchParams.get(\"offset\")) || 0), lim = Math.min(500, parseInt(url.searchParams.get(\"limit\")) || 200);\n      return sende(res, 200, { items: liste.slice(off, off + lim), total: gesamt });\n    }\n    if (teile.length === 2 && M === \"POST\") {\n      const b = await lies(req);\n      const { out, fehler } = pruefe(e, b, false);\n      if (fehler.length) return sende(res, 400, { error: fehler.join(\", \") });\n      if (t.length >= 50000) return sende(res, 400, { error: \"Speicher voll\" });\n      const r = Object.assign({ id: ++db.zaehler[e.plural], created: new Date().toISOString(), updated: new Date().toISOString() }, out);\n      if (e.owner && user) r.owner = user.id;\n      t.push(r); st.sichern();\n      return sende(res, 201, r);\n    }\n    if (teile.length === 3 && id) {\n      const r = t.find((x) => x.id === id);\n      if (!r || !eigene(r)) return sende(res, 404, { error: \"Nicht gefunden\" });\n      if (lesen) return sende(res, 200, r);\n      if (M === \"PUT\" || M === \"POST\") {\n        if (e.owner && user && !user.admin && r.owner !== user.id) return sende(res, 403, { error: \"Nicht erlaubt\" });\n        const { out, fehler } = pruefe(e, await lies(req), true);\n        if (fehler.length) return sende(res, 400, { error: fehler.join(\", \") });\n        Object.assign(r, out, { updated: new Date().toISOString() }); st.sichern();\n        return sende(res, 200, r);\n      }\n      if (M === \"DELETE\") {\n        if (e.owner && user && !user.admin && r.owner !== user.id) return sende(res, 403, { error: \"Nicht erlaubt\" });\n        t.splice(t.indexOf(r), 1); st.sichern();\n        return sende(res, 200, { ok: true });\n      }\n    }\n    return sende(res, 405, { error: \"Methode nicht erlaubt\" });\n  }\n\n  function statisch(req, res, pfad) {\n    let rel = pfad === \"/\" ? \"/index.html\" : pfad;\n    let datei;\n    try { datei = path.normalize(path.join(publicDir, decodeURIComponent(rel))); } catch (e) { res.writeHead(400); return res.end(); }\n    if (datei !== publicDir && !datei.startsWith(publicDir + path.sep)) { res.writeHead(403); return res.end(); }\n    let s; try { s = fs.statSync(datei); if (s.isDirectory()) { datei = path.join(datei, \"index.html\"); s = fs.statSync(datei); } } catch (e) { s = null; }\n    if (!s) {\n      if (path.extname(rel)) { res.writeHead(404, { \"Content-Type\": \"text/plain\" }); return res.end(\"Nicht gefunden\"); }\n      datei = path.join(publicDir, \"index.html\");\n      try { s = fs.statSync(datei); } catch (e) { res.writeHead(404, { \"Content-Type\": \"text/plain\" }); return res.end(\"Kein Frontend vorhanden\"); }\n    }\n    const h = { \"Content-Type\": MIME[path.extname(datei).toLowerCase()] || \"application/octet-stream\", \"Cache-Control\": \"no-cache\", \"X-Content-Type-Options\": \"nosniff\" };\n    if (opt.headerExtra) Object.assign(h, opt.headerExtra);\n    res.writeHead(200, h);\n    if (req.method === \"HEAD\") return res.end();\n    fs.createReadStream(datei).pipe(res);\n  }\n\n  async function handler(req, res, pfad) {\n    try {\n      const url = new URL(req.url, \"http://x\");\n      const p = pfad || url.pathname;\n      if (p === \"/api\" || p.startsWith(\"/api/\")) {\n        const teile = p.split(\"/\").filter(Boolean);\n        return await api(req, res, teile, url);\n      }\n      if (req.method !== \"GET\" && req.method !== \"HEAD\") { res.writeHead(405); return res.end(); }\n      return statisch(req, res, p);\n    } catch (e) {\n      if (res.headersSent) { try { res.end(); } catch (x) {} return; }\n      sende(res, e.code === 413 || e.code === 400 ? e.code : 500, { error: e.code ? e.message : \"Serverfehler\" });\n    }\n  }\n  return { handler, spec, logikFehler, stop: () => st.jetzt(), db };\n}\n\n/* ---------- Standalone ---------- */\nfunction startStandalone() {\n  const dir = __dirname;\n  let spec; try { spec = JSON.parse(fs.readFileSync(path.join(dir, \"app.spec.json\"), \"utf8\")); } catch (e) { console.error(\"app.spec.json fehlt oder ist kaputt: \" + e.message); process.exit(1); }\n  let logic = \"\"; try { logic = fs.readFileSync(path.join(dir, \"logic.js\"), \"utf8\"); } catch (e) {}\n  const app = createApp({ dir, spec, logic, dataDir: process.env.DATA_DIR || path.join(dir, \"data\"), cors: process.env.CORS !== \"0\" });\n  if (app.logikFehler) console.warn(\"[logic.js] \" + app.logikFehler);\n  const port = Number(process.env.PORT) || 3000;\n  const srv = require(\"http\").createServer((req, res) => app.handler(req, res));\n  srv.listen(port, () => console.log(spec.name + \" laeuft auf http://localhost:\" + port));\n  const ende = () => { app.stop(); process.exit(0); };\n  process.on(\"SIGINT\", ende); process.on(\"SIGTERM\", ende);\n}\n\nmodule.exports = { createApp, normSpec, startStandalone };\nif (require.main === module) startStandalone();\n";
+/*LZ-ENDE*/
+
+/* ---------------- CODE-SCHMIEDE: Projekt-Bausteine (Backend-Laufzeit, Client, ZIP, GitHub/APK) ---------------- */
+const cfSlug = (s) => {
+  let t = String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ß/g, "ss").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+  if (t.length < 3) t = (t + "-app").replace(/^-/, "app");
+  return t;
+};
+const cfBase = () => { try { return new URL(window.nxServer(), location.href).origin; } catch (e) { return ""; } };
+
+const CF_API_DOK = [
+  "VORHANDENE FUNKTIONEN — window.API ist schon geladen (api.js). NICHT neu schreiben, NICHT fetch() fuer die eigene API benutzen:",
+  "- API.list(res, {q, sort, limit, offset, <feldname>: wert}) -> Promise<{items:[...], total}>   res = Plural-Name der Tabelle; sort z.B. \"-id\" (neueste zuerst), \"titel\", \"-created\"",
+  "- API.get(res, id) / API.create(res, obj) / API.update(res, id, obj) (nur geaenderte Felder) / API.remove(res, id) -> Promise",
+  "- API.call(methode, pfad, body) fuer eigene Routen, z.B. API.call(\"GET\", \"/stats\") (Pfad OHNE /api-Praefix) -> Promise<Antwort>",
+  "- Nur wenn auth=true: API.register(email, passwort, name), API.login(email, passwort), API.logout(), API.me() -> Promise<user|null>, API.user (aktueller Nutzer oder null). Bei abgelaufener Sitzung feuert window das Event \"api-logout\" -> Login-Ansicht zeigen.",
+  "- Jede Funktion lehnt bei Fehlern mit Error(message) ab; message ist deutsch und darf dem Nutzer direkt angezeigt werden.",
+  "- Datensaetze haben id, created, updated (ISO-Text); bool-Felder sind true/false, number-Felder Zahlen, date-Felder ISO-Text (YYYY-MM-DD).",
+].join("\n");
+
+const cfApiJs = () => [
+  "/* api.js — Client fuer das Backend. Wird automatisch erzeugt, nicht bearbeiten. */",
+  "(function () {",
+  "  var BASE = window.NEMESIS_API_BASE ? String(window.NEMESIS_API_BASE).replace(/\\/?$/, \"/\") : \"\";",
+  "  var mem = {}; try { mem = JSON.parse(window.name || \"{}\") || {}; } catch (e) { mem = {}; }",
+  "  function get(k) { try { var v = localStorage.getItem(k); if (v !== null) return v; } catch (e) {} return mem[k] || null; }",
+  "  function set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} if (v === null) delete mem[k]; else mem[k] = v; try { window.name = JSON.stringify(mem); } catch (e) {} }",
+  "  var API = { user: null };",
+  "  function req(method, path, body) {",
+  "    var h = { \"Content-Type\": \"application/json\" }, t = get(\"api_token\");",
+  "    if (t) h.Authorization = \"Bearer \" + t;",
+  "    return fetch(BASE + \"api\" + path, { method: method, headers: h, body: body === undefined || method === \"GET\" ? undefined : JSON.stringify(body) })",
+  "      .catch(function () { throw new Error(\"Keine Verbindung zum Server\"); })",
+  "      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) {",
+  "        if (!r.ok) {",
+  "          if (r.status === 401 && t && path.indexOf(\"/auth/\") !== 0) { set(\"api_token\", null); API.user = null; try { window.dispatchEvent(new Event(\"api-logout\")); } catch (e) {} }",
+  "          var e = new Error(d.error || (\"Fehler \" + r.status)); e.status = r.status; throw e;",
+  "        }",
+  "        return d;",
+  "      }); });",
+  "  }",
+  "  function qs(o) { var p = []; for (var k in (o || {})) if (o[k] !== undefined && o[k] !== null && o[k] !== \"\") p.push(encodeURIComponent(k) + \"=\" + encodeURIComponent(o[k])); return p.length ? \"?\" + p.join(\"&\") : \"\"; }",
+  "  API.list = function (res, o) { return req(\"GET\", \"/\" + res + qs(o)); };",
+  "  API.get = function (res, id) { return req(\"GET\", \"/\" + res + \"/\" + id); };",
+  "  API.create = function (res, obj) { return req(\"POST\", \"/\" + res, obj || {}); };",
+  "  API.update = function (res, id, obj) { return req(\"PUT\", \"/\" + res + \"/\" + id, obj || {}); };",
+  "  API.remove = function (res, id) { return req(\"DELETE\", \"/\" + res + \"/\" + id); };",
+  "  API.call = function (method, path, body) { return req(String(method).toUpperCase(), (path.charAt(0) === \"/\" ? \"\" : \"/\") + path, body); };",
+  "  function sitzung(d) { set(\"api_token\", d.token); API.user = d.user; return d.user; }",
+  "  API.register = function (email, pw, name) { return req(\"POST\", \"/auth/register\", { email: email, password: pw, name: name }).then(sitzung); };",
+  "  API.login = function (email, pw) { return req(\"POST\", \"/auth/login\", { email: email, password: pw }).then(sitzung); };",
+  "  API.logout = function () { return req(\"POST\", \"/auth/logout\", {}).catch(function () {}).then(function () { set(\"api_token\", null); API.user = null; }); };",
+  "  API.me = function () { if (!get(\"api_token\")) return Promise.resolve(null); return req(\"GET\", \"/auth/me\").then(function (d) { API.user = d.user; return d.user; }).catch(function () { set(\"api_token\", null); API.user = null; return null; }); };",
+  "  window.API = API;",
+  "})();",
+].join("\n");
+
+const cfConfigJs = (base) => "/* config.js — Adresse des Servers. Leer = gleicher Server wie diese Seite. */\nwindow.NEMESIS_API_BASE = " + JSON.stringify(base || "") + ";\n";
+
+const cfDebugSnippet = "<script>(function(){function s(m){try{parent.postMessage({nxFehler:String(m).slice(0,400)},'*')}catch(e){}}window.addEventListener('error',function(e){s((e.message||'Fehler')+(e.lineno?' (Zeile '+e.lineno+')':''))});window.addEventListener('unhandledrejection',function(e){s('Promise: '+((e.reason&&e.reason.message)||e.reason))});var ce=console.error;console.error=function(){s([].slice.call(arguments).join(' '));ce.apply(console,arguments)}})();<\/script>";
+
+// Alle Dateien, die im Browser (public/) ausgeliefert werden
+const cfPublic = (p, opt) => {
+  const o = opt || {};
+  const f = Object.assign({}, p.files);
+  f["public/api.js"] = cfApiJs();
+  f["public/config.js"] = cfConfigJs(o.base || "");
+  if (o.debug && f["public/index.html"]) f["public/index.html"] = f["public/index.html"].replace(/<head[^>]*>/i, (m) => m + cfDebugSnippet);
+  return f;
+};
+const cfDeployBody = (p) => ({ slug: p.slug, spec: p.spec, logic: p.logic || "", files: cfPublic(p, { debug: true }) });
+
+const cfReadme = (p) => [
+  "# " + p.spec.name,
+  "",
+  p.spec.kurz || "",
+  "",
+  "Erzeugt mit der Nemesis Code-Schmiede. Vollstaendige App: Server mit Datenbank" + (p.spec.auth ? ", Benutzer-Login" : "") + " und Oberflaeche.",
+  "",
+  "## Starten (am Rechner oder auf einem Server)",
+  "```",
+  "node server.js",
+  "```",
+  "Braucht nur Node.js 18 oder neuer, keine weiteren Pakete. Danach im Browser: http://localhost:3000",
+  "- Port: `PORT=8080 node server.js`",
+  "- Daten liegen in `data/daten.json` (einfach sichern/kopieren). Anderer Ort: `DATA_DIR=/pfad`",
+  p.spec.auth ? "- Der **erste** Benutzer, der sich registriert, wird Admin und sieht alle Daten." : "",
+  "",
+  "## Mit Docker",
+  "```",
+  "docker build -t " + p.slug + " .",
+  "docker run -d -p 3000:3000 -v " + p.slug + "-daten:/data " + p.slug,
+  "```",
+  "",
+  "## Als Android-App",
+  "1. Die App muss irgendwo im Internet laufen (z.B. auf deinem Server).",
+  "2. In `public/config.js` die Adresse eintragen: `window.NEMESIS_API_BASE = \"https://dein-server.ch/\";`",
+  "3. Projekt auf GitHub hochladen: der Workflow `.github/workflows/android.yml` baut dann automatisch die APK (Reiter *Releases*).",
+  "",
+  "## Aufbau",
+  "- `server.js` — Server + Datenbank + Login (Nemesis App-Laufzeit)",
+  "- `app.spec.json` — Tabellen und Felder (daraus entsteht die API unter `/api/...`)",
+  p.logic ? "- `logic.js` — eigene Server-Logik (laeuft in einer Sandbox, nur Zugriff auf die Datenbank)" : "",
+  "- `public/` — Oberflaeche (`index.html`, `style.css`, `app.js`, `api.js`, `config.js`)",
+].filter((x) => x !== "").join("\n");
+
+const cfDockerfile = () => "FROM node:20-alpine\nWORKDIR /app\nCOPY . .\nENV PORT=3000 DATA_DIR=/data\nVOLUME /data\nEXPOSE 3000\nCMD [\"node\", \"server.js\"]\n";
+
+const cfAndroidId = (slug) => "ch.nemesis." + slug.replace(/[^a-z0-9]/g, "").replace(/^(\d)/, "a$1");
+
+const cfWorkflow = () => [
+  "name: Android APK",
+  "on:",
+  "  push:",
+  "    branches: [main, master]",
+  "  workflow_dispatch: {}",
+  "permissions:",
+  "  contents: write",
+  "jobs:",
+  "  apk:",
+  "    runs-on: ubuntu-latest",
+  "    steps:",
+  "      - uses: actions/checkout@v4",
+  "      - uses: actions/setup-node@v4",
+  "        with:",
+  "          node-version: 20",
+  "      - uses: actions/setup-java@v4",
+  "        with:",
+  "          distribution: temurin",
+  "          java-version: 17",
+  "      - name: Capacitor installieren",
+  "        run: npm install",
+  "      - name: Android-Projekt erzeugen",
+  "        run: npx cap add android",
+  "      - name: Icons erzeugen",
+  "        continue-on-error: true",
+  "        run: |",
+  "          npm install --no-save @capacitor/assets@3",
+  "          npx capacitor-assets generate --android",
+  "      - name: Web-Dateien einbauen",
+  "        run: npx cap sync android",
+  "      - name: APK bauen",
+  "        run: cd android && chmod +x gradlew && ./gradlew assembleDebug",
+  "      - name: Release mit APK",
+  "        uses: softprops/action-gh-release@v2",
+  "        with:",
+  "          tag_name: build-${{ github.run_number }}",
+  "          name: App Build ${{ github.run_number }}",
+  "          make_latest: true",
+  "          files: android/app/build/outputs/apk/debug/app-debug.apk",
+].join("\n") + "\n";
+
+const cfAndroidDateien = (p, base) => {
+  const f = {};
+  f["package.json"] = JSON.stringify({ name: p.slug, version: "1.0.0", private: true, scripts: { start: "node server.js" },
+    dependencies: { "@capacitor/core": "^6.2.0", "@capacitor/cli": "^6.2.0", "@capacitor/android": "^6.2.0" } }, null, 2);
+  f["capacitor.config.json"] = JSON.stringify({ appId: cfAndroidId(p.slug), appName: p.spec.name, webDir: "public", server: { androidScheme: "https" } }, null, 2);
+  f[".github/workflows/android.yml"] = cfWorkflow();
+  return f;
+};
+
+// Komplettes, eigenstaendiges Projekt (ZIP): Server + Oberflaeche + Docker + Android-Vorlage
+const cfProjektDateien = (p, opt) => {
+  const o = opt || {};
+  const f = {};
+  f["server.js"] = "#!/usr/bin/env node\n" + LAUFZEIT_SRC;
+  f["app.spec.json"] = JSON.stringify(p.spec, null, 2);
+  if (p.logic) f["logic.js"] = p.logic;
+  Object.assign(f, cfPublic(p, { base: o.base || "" }));
+  f["Dockerfile"] = cfDockerfile();
+  f[".gitignore"] = "node_modules\ndata\nandroid\n";
+  f["README.md"] = cfReadme(p);
+  f["package.json"] = JSON.stringify({ name: p.slug, version: "1.0.0", private: true, scripts: { start: "node server.js" } }, null, 2);
+  if (o.android) Object.assign(f, cfAndroidDateien(p, o.base));
+  return f;
+};
+
+/* ----- ZIP (ohne Bibliothek, "store") ----- */
+const CF_CRC = (() => { const t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const cfCrc32 = (u8) => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CF_CRC[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+function cfZip(dateien, ordner) {
+  const enc = new TextEncoder();
+  const teile = [], zentral = [];
+  let pos = 0;
+  const u16 = (n) => [n & 255, (n >>> 8) & 255], u32 = (n) => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+  const d = new Date();
+  const zeit = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const datum = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  Object.keys(dateien).forEach((name) => {
+    const inhalt = dateien[name];
+    const data = inhalt instanceof Uint8Array ? inhalt : enc.encode(inhalt);
+    const nm = enc.encode((ordner ? ordner + "/" : "") + name);
+    const crc = cfCrc32(data);
+    const kopf = new Uint8Array([0x50, 0x4b, 3, 4, 20, 0, 0, 8, 0, 0, ...u16(zeit), ...u16(datum), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nm.length), 0, 0]);
+    teile.push(kopf, nm, data);
+    zentral.push(new Uint8Array([0x50, 0x4b, 1, 2, 20, 0, 20, 0, 0, 8, 0, 0, ...u16(zeit), ...u16(datum), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nm.length), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...u32(pos)]), nm);
+    pos += kopf.length + nm.length + data.length;
+  });
+  const zlen = zentral.reduce((s, x) => s + x.length, 0);
+  const ende = new Uint8Array([0x50, 0x4b, 5, 6, 0, 0, 0, 0, ...u16(Object.keys(dateien).length), ...u16(Object.keys(dateien).length), ...u32(zlen), ...u32(pos), 0, 0]);
+  return new Blob([...teile, ...zentral, ende], { type: "application/zip" });
+}
+function cfDownload(blob, name) {
+  const u = URL.createObjectURL(blob);
+  const el = document.createElement("a");
+  el.href = u; el.download = name; el.rel = "noopener";
+  document.body.appendChild(el); el.click();
+  setTimeout(() => { URL.revokeObjectURL(u); el.remove(); }, 4000);
+}
+
+/* ----- App-Icon (PNG, 1024) per Canvas ----- */
+function cfIconBase64(farbe, zeichen) {
+  const c = document.createElement("canvas"); c.width = c.height = 1024;
+  const g = c.getContext("2d");
+  const grad = g.createLinearGradient(0, 0, 1024, 1024);
+  grad.addColorStop(0, farbe || "#6366f1"); grad.addColorStop(1, "#0b1020");
+  g.fillStyle = grad; g.fillRect(0, 0, 1024, 1024);
+  g.fillStyle = "rgba(255,255,255,0.12)"; g.beginPath(); g.arc(760, 260, 360, 0, 7); g.fill();
+  g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.font = "600 560px system-ui, 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif";
+  g.fillText(zeichen || "★", 512, 560);
+  return c.toDataURL("image/png").split(",")[1];
+}
+
+/* ----- GitHub: ein Commit, dann baut GitHub Actions die APK ----- */
+async function cfGh(token, pfad, opt) {
+  const r = await fetch("https://api.github.com" + pfad, Object.assign({}, opt, {
+    headers: Object.assign({ Authorization: "Bearer " + token, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" }, (opt && opt.headers) || {}),
+  }));
+  let d = null; try { d = await r.json(); } catch (e) {}
+  if (!r.ok) { const e = new Error((d && d.message) || ("GitHub " + r.status)); e.status = r.status; e.daten = d; throw e; }
+  return d;
+}
+async function cfGhPush(token, repoName, privat, dateien, bild, log) {
+  const me = await cfGh(token, "/user");
+  const owner = me.login;
+  log("Angemeldet als " + owner);
+  try { await cfGh(token, "/user/repos", { method: "POST", body: JSON.stringify({ name: repoName, private: !!privat, auto_init: true, description: "Mit der Nemesis Code-Schmiede gebaut" }) }); log("Repository angelegt"); await new Promise((r) => setTimeout(r, 2500)); }
+  catch (e) { if (e.status !== 422) throw e; log("Repository gibt es schon, wird aktualisiert"); }
+  const info = await cfGh(token, "/repos/" + owner + "/" + repoName);
+  const branch = info.default_branch || "main";
+  let ref = null;
+  for (let i = 0; i < 8 && !ref; i++) { try { ref = await cfGh(token, "/repos/" + owner + "/" + repoName + "/git/ref/heads/" + branch); } catch (e) { await new Promise((r) => setTimeout(r, 1500)); } }
+  if (!ref) throw new Error("Repository ist noch nicht bereit. Bitte nochmal versuchen.");
+  const basisCommit = await cfGh(token, "/repos/" + owner + "/" + repoName + "/git/commits/" + ref.object.sha);
+  const tree = [];
+  for (const pf of Object.keys(dateien)) tree.push({ path: pf, mode: "100644", type: "blob", content: dateien[pf] });
+  if (bild) {
+    const b = await cfGh(token, "/repos/" + owner + "/" + repoName + "/git/blobs", { method: "POST", body: JSON.stringify({ content: bild, encoding: "base64" }) });
+    tree.push({ path: "assets/icon-only.png", mode: "100644", type: "blob", sha: b.sha });
+    tree.push({ path: "assets/icon-foreground.png", mode: "100644", type: "blob", sha: b.sha });
+    tree.push({ path: "assets/icon-background.png", mode: "100644", type: "blob", sha: b.sha });
+  }
+  const neuerTree = await cfGh(token, "/repos/" + owner + "/" + repoName + "/git/trees", { method: "POST", body: JSON.stringify({ base_tree: basisCommit.tree.sha, tree }) });
+  const commit = await cfGh(token, "/repos/" + owner + "/" + repoName + "/git/commits", { method: "POST", body: JSON.stringify({ message: "App-Update aus der Nemesis Code-Schmiede", tree: neuerTree.sha, parents: [ref.object.sha] }) });
+  await cfGh(token, "/repos/" + owner + "/" + repoName + "/git/refs/heads/" + branch, { method: "PATCH", body: JSON.stringify({ sha: commit.sha, force: false }) });
+  log("Dateien hochgeladen, GitHub baut jetzt die APK");
+  return { owner, repo: repoName, sha: commit.sha, branch };
+}
+async function cfGhStatus(token, gh) {
+  const d = await cfGh(token, "/repos/" + gh.owner + "/" + gh.repo + "/actions/runs?head_sha=" + gh.sha + "&per_page=5");
+  const run = (d.workflow_runs || [])[0];
+  if (!run) return { status: "wartet", text: "Warte auf den Start …" };
+  if (run.status !== "completed") return { status: "laeuft", text: run.status === "queued" ? "In der Warteschlange …" : "Baut gerade die APK (ca. 4 bis 8 Minuten) …", url: run.html_url };
+  if (run.conclusion === "success") return { status: "fertig", text: "APK ist fertig", url: run.html_url,
+    apk: "https://github.com/" + gh.owner + "/" + gh.repo + "/releases/latest/download/app-debug.apk", releases: "https://github.com/" + gh.owner + "/" + gh.repo + "/releases/latest" };
+  return { status: "fehler", text: "Der Bau ist fehlgeschlagen (" + run.conclusion + ")", url: run.html_url };
+}
+
+/* ----- Antworten des Modells in Dateien zerlegen ----- */
+function cfParseDateien(txt) {
+  const out = {};
+  const re = /^={3,}\s*FILE:\s*(\S+?)\s*={3,}\s*$/gm;
+  const marks = []; let m;
+  while ((m = re.exec(txt))) marks.push({ name: m[1], start: m.index, ende: m.index + m[0].length });
+  marks.forEach((mk, i) => {
+    let inh = txt.slice(mk.ende, i + 1 < marks.length ? marks[i + 1].start : txt.length).replace(/^\s*\n/, "");
+    const zaun = inh.match(/^\s*```[a-zA-Z]*\n([\s\S]*?)\n```\s*$/);
+    if (zaun) inh = zaun[1];
+    else inh = inh.replace(/^\s*```[a-zA-Z]*\n/, "").replace(/\n```\s*$/, "");
+    out[mk.name.replace(/^\.?\//, "")] = inh.trim() + "\n";
+  });
+  return out;
+}
+const cfJsFehler = (src, modul) => {
+  try { modul ? new Function("module", "exports", src) : new Function(src); return ""; }
+  catch (e) { return e.message; }
+};
+// Pruefungen vor dem Livegang: liefert Liste von Problemen
+function cfPruefe(p) {
+  const pr = [];
+  const h = p.files["public/index.html"] || "", js = p.files["public/app.js"] || "";
+  if (!/<html|<!doctype/i.test(h)) pr.push("index.html ist kein HTML");
+  if (!/<script[^>]+src=["']?app\.js/i.test(h)) pr.push("index.html bindet app.js nicht ein");
+  if (!/<script[^>]+src=["']?api\.js/i.test(h)) pr.push("index.html bindet api.js nicht ein (muss VOR app.js stehen)");
+  if (!/<script[^>]+src=["']?config\.js/i.test(h)) pr.push("index.html bindet config.js nicht ein (muss ganz vor api.js stehen)");
+  if (!/<link[^>]+style\.css/i.test(h)) pr.push("index.html bindet style.css nicht ein");
+  const fe = cfJsFehler(js); if (fe) pr.push("app.js hat einen Syntaxfehler: " + fe);
+  if (p.logic) { const le = cfJsFehler(p.logic, true); if (le) pr.push("logic.js hat einen Syntaxfehler: " + le); }
+  // jede Element-ID aus app.js muss es im HTML geben (oder dort erzeugt werden)
+  const ids = new Set(); let m; const re = /getElementById\(\s*["']([\w\-]+)["']\s*\)/g;
+  while ((m = re.exec(js))) ids.add(m[1]);
+  const fehlend = [...ids].filter((i) => h.indexOf('id="' + i + '"') < 0 && h.indexOf("id='" + i + "'") < 0 && js.indexOf('id="' + i + '"') < 0 && js.indexOf("id='" + i + "'") < 0 && js.indexOf("id=\\\"" + i + "\\\"") < 0 && js.indexOf(".id = \"" + i + "\"") < 0 && js.indexOf(".id='" + i + "'") < 0 && js.indexOf(".id = '" + i + "'") < 0 && js.indexOf(".id=\"" + i + "\"") < 0);
+  if (fehlend.length) pr.push("app.js nutzt Elemente, die es im HTML nicht gibt: " + fehlend.slice(0, 8).join(", "));
+  const entPl = new Set(((p.spec && p.spec.entities) || []).map((e) => e.plural));
+  const re2 = /API\.(?:list|get|create|update|remove)\(\s*["'`]([\w\-]+)["'`]/g; const falsch = new Set();
+  while ((m = re2.exec(js))) if (!entPl.has(m[1])) falsch.add(m[1]);
+  if (falsch.size) pr.push("app.js ruft Tabellen auf, die es nicht gibt: " + [...falsch].join(", ") + " (vorhanden: " + [...entPl].join(", ") + ")");
+  return pr;
+}
+
+/* ---------------- CODE-SCHMIEDE: echte Apps (Server + Datenbank + Login + Oberflaeche + Android) ---------------- */
+const CF_PLAN_SYS = [
+  "Du bist Software-Architekt. Aus der Beschreibung entwirfst du eine ECHTE Full-Stack-App: Server mit Datenbank plus Oberflaeche.",
+  "Antworte NUR mit JSON, ohne Erklaerung:",
+  "{\"name\": Appname kurz, \"kurz\": ein Satz, \"farbe\": \"#rrggbb\" Akzentfarbe passend zum Thema, \"icon\": ein Emoji,",
+  " \"auth\": true wenn Nutzer sich anmelden und eigene Daten haben (Todo, Haushaltsbuch, Kundenverwaltung ...), false fuer oeffentliche Tools/Rechner/Seiten,",
+  " \"entities\": [{\"name\": \"aufgabe\", \"plural\": \"aufgaben\", \"owner\": true, \"publicRead\": false, \"fields\": [{\"name\": \"titel\", \"type\": \"text\", \"required\": true}]}],",
+  " \"routen\": [{\"methode\": \"GET\", \"pfad\": \"/api/stats\", \"zweck\": \"...\", \"antwort\": \"Form der JSON-Antwort\"}],",
+  " \"seiten\": [\"Ansicht 1: was sieht/kann der Nutzer\", \"...\"]}",
+  "Feldtypen: text, longtext, number, bool, date, select (mit \"options\": [...]), email, url.",
+  "Regeln: Feldnamen klein, ohne Leerzeichen und Umlaute. NIE die Felder id, created, updated, owner anlegen (automatisch). 0 bis 6 Tabellen.",
+  "owner=true: jeder Nutzer sieht nur seine eigenen Datensaetze (Admin alles). publicRead=true: alle duerfen lesen (z.B. Produktkatalog), schreiben nur Angemeldete.",
+  "\"routen\" NUR fuer Logik, die einfaches Anlegen/Lesen/Aendern/Loeschen nicht kann: Auswertungen, Summen, Statistiken, Aktionen ueber mehrere Tabellen. Sonst leeres Array.",
+  "Denk wie ein Produktdesigner: Was braucht der Nutzer WIRKLICH, damit die App im Alltag taugt? Nimm sinnvolle Felder, Status-Auswahlen, Datum, Notizen mit.",
+].join("\n");
+
+const CF_HTML_SYS = (plan) => [
+  "Du bist ein Spitzen-Frontend-Entwickler. Du schreibst die Oberflaeche (index.html + style.css) fuer diese App.",
+  "APP-PLAN (JSON):\n" + JSON.stringify(plan),
+  "",
+  CF_API_DOK,
+  "",
+  "STRENGE REGELN:",
+  "- Ausgabe NUR in diesem Format, nichts davor oder danach:",
+  "=== FILE: public/index.html ===",
+  "(Inhalt)",
+  "=== FILE: public/style.css ===",
+  "(Inhalt)",
+  "- index.html: <!doctype html>, lang=\"de\", viewport-Meta, <link rel=\"stylesheet\" href=\"style.css\">, am Ende des body GENAU diese Skripte in dieser Reihenfolge: <script src=\"config.js\"><\/script><script src=\"api.js\"><\/script><script src=\"app.js\"><\/script>",
+  "- Baue ALLE Ansichten des Plans als Container mit eindeutigen ids (z.B. <section id=\"ansicht-liste\">), dazu Formulare, Listen-Container, Suchfeld, Buttons, leere Zustaende, Lade- und Fehlerbereich" + (plan.auth ? ", Login-/Registrier-Ansicht, Abmelden-Knopf" : "") + ".",
+  "- Jedes Element, das app.js steuern muss, bekommt eine id. Schreibe KEINE Logik und kein <script> mit Code in die HTML-Datei.",
+  "- Keine Frameworks, kein Build. Erlaubt per CDN: nur kleine Bibliotheken, die du wirklich brauchst (z.B. Chart.js von cdnjs).",
+  "- Design: eigenstaendig und hochwertig, nicht wie ein Standard-Template. Mobil zuerst, funktioniert auch am Desktop. Akzentfarbe " + (plan.farbe || "#6366f1") + ". Systemschrift-Stack, klare Hierarchie, grosszuegige Abstaende, Hover/Fokus/Aktiv-Zustaende, weiche Uebergaenge, Dunkelmodus per prefers-color-scheme. Grosse Touch-Ziele (min. 44px).",
+  "- Alle Texte deutsch.",
+].join("\n");
+
+const CF_JS_SYS = (plan) => [
+  "Du bist ein Spitzen-Frontend-Entwickler. Du schreibst app.js: die komplette, FUNKTIONIERENDE Logik der Oberflaeche.",
+  "APP-PLAN (JSON):\n" + JSON.stringify(plan),
+  "",
+  CF_API_DOK,
+  "",
+  "STRENGE REGELN:",
+  "- Ausgabe NUR in diesem Format:",
+  "=== FILE: public/app.js ===",
+  "(Inhalt)",
+  "- Nutze AUSSCHLIESSLICH ids, die in der gegebenen index.html existieren (oder erzeuge Elemente selbst per document.createElement). Pruefe jede id.",
+  "- Rufe API.list/create/update/remove nur mit diesen Tabellen auf: " + ((plan.entities || []).map((e) => e.plural).join(", ") || "(keine)") + ". Eigene Routen nur ueber API.call.",
+  "- Alles muss WIRKLICH funktionieren: Daten beim Start laden, anlegen, bearbeiten, loeschen (mit eigener Bestaetigung in der Seite, kein confirm()/alert()/prompt()), suchen/filtern, sortieren wo sinnvoll, Formularfehler (Servermeldung) anzeigen, Ladezustand, leerer Zustand, Fehler-Toast.",
+  plan.auth ? "- Login-Ablauf: beim Start API.me(); ohne Nutzer Login/Registrieren zeigen, sonst die App. Event \"api-logout\" -> zurueck zum Login. Abmelden-Knopf." : "- Kein Login noetig.",
+  "- Alle vom Nutzer stammenden Texte beim Einfuegen in HTML escapen (textContent oder Escape-Funktion), nie ungeprueft per innerHTML.",
+  "- Kein localStorage/sessionStorage direkt benutzen. Kein eval. Kein alert/confirm/prompt.",
+  "- Schreibe kompakt (unter 450 Zeilen), sauber, ohne Platzhalter und ohne \"TODO\". Die Datei muss vollstaendig sein.",
+].join("\n");
+
+const CF_LOGIK_SYS = (plan) => [
+  "Du schreibst logic.js: eigene Server-Routen fuer diese App. Sie laufen in einer Sandbox (kein require, kein fetch, kein Dateizugriff).",
+  "APP-PLAN (JSON):\n" + JSON.stringify(plan),
+  "",
+  "FORMAT (Ausgabe NUR dies):",
+  "=== FILE: logic.js ===",
+  "module.exports = { routes: {",
+  "  \"GET /api/stats\": (ctx) => { const rows = ctx.db.list(\"aufgaben\"); return { gesamt: rows.length }; },",
+  "  \"POST /api/aufgaben/:id/erledigen\": (ctx) => ctx.db.update(\"aufgaben\", ctx.params.id, { fertig: true }),",
+  "} };",
+  "ctx hat: body (JSON der Anfrage), query (Objekt), params (Pfad-Parameter wie :id), user ({id,name,email,admin} oder null), db.",
+  "db: db.list(plural, filterObjekt?) -> Array; db.get(plural, id); db.insert(plural, objekt); db.update(plural, id, teilobjekt); db.remove(plural, id). Alles synchron.",
+  "Bei owner-Tabellen: db.list liefert ALLE Datensaetze — filtere selbst nach ctx.user.id (Feld owner), ausser ctx.user.admin.",
+  "Fehler: throw new Error(\"Deutsche Meldung\") — wird dem Nutzer angezeigt. Rueckgabe: ein Objekt (wird als JSON gesendet).",
+  "Implementiere GENAU diese Routen aus dem Plan (\"routen\"), mit exakt der dort beschriebenen Antwortform. Rechne korrekt (Rundung, leere Listen, Division durch 0).",
+].join("\n");
+
+const cfLiesAntwort = (t) => String(t || "").trim();
+
 function CodeForge({ agents, models }) {
+  const [modus, setModus] = useState("voll");
+  if (modus === "einfach") return (
+    <>
+      <div className="seg"><button onClick={() => setModus("voll")}>Voll-App</button><button className="on">Einfache Seite</button></div>
+      <CodeForgeEinfach agents={agents} models={models} />
+    </>
+  );
+  return (
+    <>
+      <div className="seg"><button className="on">Voll-App</button><button onClick={() => setModus("einfach")}>Einfache Seite</button></div>
+      <CodeForgeVoll agents={agents} models={models} />
+    </>
+  );
+}
+
+const CF_SPEICHER = "nx:cf:projekte";
+const cfLadeProjekte = () => { try { return JSON.parse(localStorage.getItem(CF_SPEICHER) || "[]"); } catch (e) { return []; } };
+const cfSpeichereProjekte = (liste) => { try { localStorage.setItem(CF_SPEICHER, JSON.stringify(liste.slice(0, 15))); } catch (e) {} };
+
+function CodeForgeVoll({ agents, models }) {
+  const [wunsch, setWunsch] = useState("");
+  const [p, setP] = useState(null);                 // aktuelles Projekt
+  const [liste, setListe] = useState(cfLadeProjekte);
+  const [schritte, setSchritte] = useState([]);     // Fortschritt beim Bauen
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [tab, setTab] = useState("vorschau");
+  const [aendern, setAendern] = useState("");
+  const [bericht, setBericht] = useState(null);
+  const [laufFehler, setLaufFehler] = useState([]);
+  const [datei, setDatei] = useState("public/app.js");
+  const [ghToken, setGhToken] = useState(() => { try { return localStorage.getItem("nx:gh") || ""; } catch (e) { return ""; } });
+  const [ghPrivat, setGhPrivat] = useState(false);
+  const [ghLog, setGhLog] = useState([]);
+  const [ghStatus, setGhStatus] = useState(null);
+  const [iframeKey, setIframeKey] = useState(0);
+  const [info, setInfo] = useState("");
+  const aktiv = useRef(true);
+  useEffect(() => () => { aktiv.current = false; }, []);
+
+  useEffect(() => {
+    const h = (e) => { if (e.data && typeof e.data.nxFehler === "string") setLaufFehler((l) => (l.indexOf(e.data.nxFehler) >= 0 ? l : l.concat(e.data.nxFehler).slice(-5))); };
+    window.addEventListener("message", h);
+    return () => window.removeEventListener("message", h);
+  }, []);
+
+  const merke = (np) => {
+    setP(np);
+    const rest = liste.filter((x) => x.slug !== np.slug);
+    const neu = [np].concat(rest);
+    setListe(neu); cfSpeichereProjekte(neu);
+  };
+  const step = (t, ok) => setSchritte((s) => (ok === undefined ? s.concat({ t, ok: null }) : s.map((x, i) => (i === s.length - 1 ? { t: x.t, ok } : x))));
+
+  const gibInfo = (t) => { setInfo(t); setTimeout(() => setInfo(""), 2500); };
+
+  // Prueft die Dateien; bei Problemen darf das Modell einmal selbst nachbessern
+  const reparieren = async (proj, probleme, extra) => {
+    const sys = [
+      "Du bist ein Spitzen-Entwickler und reparierst eine Web-App. Gib die FEHLERHAFTEN Dateien VOLLSTAENDIG korrigiert zurueck, im Format:",
+      "=== FILE: public/app.js ===", "(kompletter Inhalt)", "=== FILE: public/index.html ===", "(kompletter Inhalt, nur falls geaendert)",
+      "Moegliche Dateien: public/index.html, public/style.css, public/app.js, logic.js. Keine Erklaerung. Aendere nichts, was nicht kaputt ist.",
+      "Die Datei public/api.js existiert schon und bietet window.API (list/get/create/update/remove/call" + (proj.spec.auth ? "/register/login/logout/me" : "") + ").",
+    ].join("\n");
+    const user = "PROBLEME:\n- " + probleme.join("\n- ") + (extra ? "\n\n" + extra : "")
+      + "\n\nPLAN:\n" + JSON.stringify(proj.spec)
+      + "\n\n=== FILE: public/index.html ===\n" + proj.files["public/index.html"]
+      + "\n=== FILE: public/app.js ===\n" + proj.files["public/app.js"]
+      + (proj.logic ? "\n=== FILE: logic.js ===\n" + proj.logic : "");
+    const neu = cfParseDateien(await ask([{ role: "user", content: user }], sys, 8000));
+    const np = { ...proj, files: { ...proj.files }, logic: proj.logic };
+    Object.keys(neu).forEach((k) => { if (k === "logic.js") np.logic = neu[k]; else if (k.indexOf("public/") === 0 && /\.(html|css|js)$/.test(k) && !/api\.js$|config\.js$/.test(k)) np.files[k] = neu[k]; });
+    return np;
+  };
+
+  const bauen = async () => {
+    if (wunsch.trim().length < 8) { setErr("Beschreib die App etwas genauer."); return; }
+    setBusy(true); setErr(""); setSchritte([]); setBericht(null); setLaufFehler([]); setP(null); setGhStatus(null); setGhLog([]);
+    try {
+      step("Plan: Tabellen, Felder, Ansichten");
+      const plan = toJSON(await ask([{ role: "user", content: wunsch }], CF_PLAN_SYS, 3000));
+      if (!plan || typeof plan !== "object") throw new Error("Plan nicht lesbar");
+      plan.name = String(plan.name || "Meine App").slice(0, 60);
+      plan.entities = Array.isArray(plan.entities) ? plan.entities : [];
+      plan.routen = Array.isArray(plan.routen) ? plan.routen.filter((r) => r && /^(GET|POST|PUT|DELETE)$/.test(r.methode) && /^\/api\/[\w\-\/:]+$/.test(r.pfad || "")) : [];
+      plan.auth = !!plan.auth;
+      if (!/^#[0-9a-f]{6}$/i.test(plan.farbe || "")) plan.farbe = "#6366f1";
+      step(null, true);
+      const slug0 = cfSlug(plan.name);
+      const belegt = new Set(liste.map((x) => x.slug));
+      let slug = slug0, i = 2; while (belegt.has(slug)) slug = slug0.slice(0, 28) + "-" + i++;
+      const proj = { slug, spec: plan, files: {}, logic: "", wunsch, erstellt: Date.now() };
+
+      let logik = "";
+      if (plan.routen.length) {
+        step("Server-Logik (" + plan.routen.length + " eigene Routen)");
+        const r = cfParseDateien(await ask([{ role: "user", content: "Schreibe logic.js." }], CF_LOGIK_SYS(plan), 4000));
+        logik = r["logic.js"] || "";
+        step(null, !!logik);
+      }
+      proj.logic = logik;
+
+      step("Oberflaeche: Aufbau und Design");
+      const h = cfParseDateien(await ask([{ role: "user", content: "Schreibe index.html und style.css." }], CF_HTML_SYS(plan), 8000));
+      if (!h["public/index.html"]) throw new Error("Das Modell hat keine index.html geliefert. Bitte nochmal versuchen.");
+      proj.files["public/index.html"] = h["public/index.html"];
+      proj.files["public/style.css"] = h["public/style.css"] || "body{font-family:system-ui;margin:0}\n";
+      step(null, true);
+
+      step("Oberflaeche: Logik (app.js)");
+      const j = cfParseDateien(await ask([{ role: "user", content: "index.html:\n" + proj.files["public/index.html"] + "\n\nstyle.css (Auszug):\n" + proj.files["public/style.css"].slice(0, 2500) + "\n\nSchreibe jetzt app.js." }], CF_JS_SYS(plan), 8000));
+      if (!j["public/app.js"]) throw new Error("Das Modell hat keine app.js geliefert. Bitte nochmal versuchen.");
+      proj.files["public/app.js"] = j["public/app.js"];
+      step(null, true);
+
+      let aktuell = proj;
+      for (let runde = 0; runde < 2; runde++) {
+        const probleme = cfPruefe(aktuell);
+        if (!probleme.length) break;
+        step("Selbstpruefung: " + probleme.length + " Problem(e) — Agent repariert");
+        try { aktuell = await reparieren(aktuell, probleme); step(null, true); } catch (e) { step(null, false); break; }
+      }
+      const rest = cfPruefe(aktuell);
+      if (rest.length) setInfo("Hinweis: " + rest[0]);
+
+      step("Auf deinem Server starten und testen");
+      aktuell = await deploy(aktuell);
+      setTab("vorschau");
+    } catch (e) { setErr(e.message || String(e)); }
+    setBusy(false);
+  };
+
+  const deploy = async (proj) => {
+    const srv = window.nxServer();
+    if (!srv) { merke(proj); throw new Error("Kein Server verbunden: Die App ist gebaut (siehe Dateien/ZIP), aber zum Testen und Hosten brauchst du den Nemesis-Server (Zahnrad)."); }
+    const r = await fetch(srv + "/apps/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cfDeployBody(proj)) });
+    let d = null; try { d = await r.json(); } catch (e) {}
+    if (!r.ok || !d || !d.ok) {
+      if (d && d.bericht) setBericht(d.bericht);
+      merke(proj);
+      step(null, false);
+      throw new Error((d && d.error) ? d.error : (d && d.fehler ? d.fehler + (d.bericht ? ": " + d.bericht.filter((b) => !b.ok).map((b) => b.text).join("; ") : "") : "Server meldet Fehler " + r.status));
+    }
+    const np = { ...proj, deploy: { version: d.version, zeit: Date.now() } };
+    setBericht(d.bericht); setLaufFehler([]); setIframeKey((k) => k + 1);
+    merke(np);
+    step(null, true);
+    return np;
+  };
+
+  const neuDeployen = async (proj) => {
+    setBusy(true); setErr(""); setSchritte([{ t: "Auf deinem Server aktualisieren", ok: null }]);
+    try { await deploy(proj); } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const aendernLos = async () => {
+    if (!aendern.trim() || !p) return;
+    setBusy(true); setErr(""); setSchritte([{ t: "Agent baut die Aenderung ein", ok: null }]);
+    try {
+      const sys = [
+        "Du bist ein Spitzen-Entwickler. Du aenderst eine bestehende Full-Stack-App nach Wunsch. Gib NUR die geaenderten Dateien VOLLSTAENDIG zurueck im Format:",
+        "=== FILE: pfad ===", "(kompletter Inhalt)",
+        "Erlaubte Dateien: public/index.html, public/style.css, public/app.js, logic.js, app.spec.json (Tabellen/Felder/auth; nur als gueltiges JSON mit denselben Schluesseln wie vorher).",
+        "Neue Tabellen/Felder gehoeren in app.spec.json UND in die Oberflaeche. Neue eigene Server-Routen gehoeren in logic.js (module.exports = { routes: { \"GET /api/x\": (ctx) => ... } }; ctx = {body, query, params, user, db{list,get,insert,update,remove}}).",
+        "Die Datei public/api.js existiert und bietet window.API (nicht aendern):\n" + CF_API_DOK,
+        "Keine Erklaerung, keine Platzhalter.",
+      ].join("\n");
+      const user = "AENDERUNGSWUNSCH:\n" + aendern + "\n\n=== FILE: app.spec.json ===\n" + JSON.stringify(p.spec, null, 1)
+        + Object.keys(p.files).map((k) => "\n=== FILE: " + k + " ===\n" + p.files[k]).join("")
+        + (p.logic ? "\n=== FILE: logic.js ===\n" + p.logic : "");
+      const neu = cfParseDateien(await ask([{ role: "user", content: user }], sys, 8000));
+      let np = { ...p, files: { ...p.files }, spec: p.spec, logic: p.logic };
+      Object.keys(neu).forEach((k) => {
+        if (k === "logic.js") np.logic = neu[k];
+        else if (k === "app.spec.json") { try { const s = JSON.parse(neu[k]); if (s && Array.isArray(s.entities)) np.spec = { ...p.spec, ...s }; } catch (e) {} }
+        else if (/^public\/[\w\-.]+\.(html|css|js)$/.test(k) && !/api\.js$|config\.js$/.test(k)) np.files[k] = neu[k];
+      });
+      for (let runde = 0; runde < 2; runde++) {
+        const pr = cfPruefe(np);
+        if (!pr.length) break;
+        setSchritte((s) => s.concat({ t: "Selbstpruefung: Agent repariert", ok: null }));
+        try { np = await reparieren(np, pr); } catch (e) { break; }
+      }
+      setSchritte((s) => s.map((x) => ({ ...x, ok: true })).concat({ t: "Auf deinem Server aktualisieren", ok: null }));
+      await deploy(np);
+      setAendern("");
+    } catch (e) { setErr(e.message || String(e)); }
+    setBusy(false);
+  };
+
+  const fehlerReparieren = async () => {
+    if (!p || !laufFehler.length) return;
+    setBusy(true); setErr(""); setSchritte([{ t: "Agent repariert Fehler aus der laufenden App", ok: null }]);
+    try {
+      let np = await reparieren(p, ["Beim Ausfuehren der App im Browser sind diese Fehler aufgetreten:"].concat(laufFehler));
+      const pr = cfPruefe(np); if (pr.length) np = await reparieren(np, pr);
+      setSchritte((s) => s.map((x) => ({ ...x, ok: true })).concat({ t: "Auf deinem Server aktualisieren", ok: null }));
+      await deploy(np);
+    } catch (e) { setErr(e.message || String(e)); }
+    setBusy(false);
+  };
+
+  const url = p ? cfBase() + "/x/" + p.slug + "/" : "";
+  const zipLaden = (android) => {
+    try { cfDownload(cfZip(cfProjektDateien(p, { base: android ? url : "", android: !!android }), p.slug), p.slug + ".zip"); }
+    catch (e) { setErr("ZIP ging nicht: " + e.message); }
+  };
+  const kopiere = (t) => { try { navigator.clipboard.writeText(t); gibInfo("Kopiert."); } catch (e) { gibInfo("Kopieren ging nicht."); } };
+
+  const apkBauen = async () => {
+    if (!p) return;
+    if (!ghToken.trim()) { setErr("GitHub-Schluessel fehlt (siehe Schritt 1 unten)."); return; }
+    setBusy(true); setErr(""); setGhLog([]); setGhStatus(null);
+    try {
+      try { localStorage.setItem("nx:gh", ghToken.trim()); } catch (e) {}
+      let proj = p;
+      if (!proj.deploy) { setGhLog(["Erst die App auf deinen Server stellen …"]); proj = await deploy(proj); }
+      const dateien = cfProjektDateien(proj, { base: cfBase() + "/x/" + proj.slug + "/", android: true });
+      const log = (t) => setGhLog((l) => l.concat(t));
+      const gh = await cfGhPush(ghToken.trim(), proj.slug, ghPrivat, dateien, cfIconBase64(proj.spec.farbe, proj.spec.icon || (proj.spec.name || "A").charAt(0).toUpperCase()), log);
+      const np = { ...proj, gh };
+      merke(np);
+      setGhStatus({ status: "wartet", text: "Warte auf den Start …" });
+      for (let i = 0; i < 120 && aktiv.current; i++) {
+        await new Promise((r) => setTimeout(r, 10000));
+        let s; try { s = await cfGhStatus(ghToken.trim(), gh); } catch (e) { continue; }
+        if (!aktiv.current) break;
+        setGhStatus(s);
+        if (s.status === "fertig" || s.status === "fehler") break;
+      }
+    } catch (e) { setErr(e.message || String(e)); }
+    setBusy(false);
+  };
+  const apkStatus = async () => {
+    if (!p || !p.gh) return;
+    try { setGhStatus(await cfGhStatus(ghToken.trim(), p.gh)); } catch (e) { setErr(e.message); }
+  };
+  const loeschen = async (proj) => {
+    const neu = liste.filter((x) => x.slug !== proj.slug); setListe(neu); cfSpeichereProjekte(neu);
+    try { const srv = window.nxServer(); if (srv) await fetch(srv + "/apps/loeschen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug: proj.slug }) }); } catch (e) {}
+    if (p && p.slug === proj.slug) setP(null);
+  };
+
+  /* ---------------- Ansicht ---------------- */
+  if (!p || busy) return (
+    <>
+      <div className="log">Beschreib deine App. Der Agent entwirft Tabellen und Ansichten, baut Server mit Datenbank{" "}{"(+ Login)"} und Oberfläche, stellt sie auf deinen Server und testet sie wirklich. Danach: Link, ZIP oder Android-App.</div>
+      {!p && !busy && (
+        <>
+          <span className="lbl">Was soll die App können?</span>
+          <textarea value={wunsch} style={{ minHeight: 140 }}
+            placeholder="z.B. Ein Haushaltsbuch: Ausgaben und Einnahmen mit Kategorie und Datum erfassen, Monatsübersicht mit Summen, Login für mich und meine Frau."
+            onChange={(e) => setWunsch(e.target.value)} />
+          <button className="btn tox" onClick={bauen}>App bauen</button>
+        </>
+      )}
+      {schritte.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          {schritte.map((s, i) => <div key={i} className={"log " + (s.ok === false ? "err" : s.ok ? "done" : "warn")}>{s.ok === null ? "… " : s.ok ? "✓ " : "✕ "}{s.t}</div>)}
+        </div>
+      )}
+      {err && <div className="log err" style={{ marginTop: 12 }}>{err}</div>}
+      {bericht && <Probelauf bericht={bericht} />}
+      {!busy && !p && liste.length > 0 && (
+        <>
+          <span className="lbl">Meine Apps</span>
+          {liste.map((x) => (
+            <div key={x.slug} className="card">
+              <div className="row">
+                <div style={{ flex: 1 }}>
+                  <div className="nm" style={{ fontSize: 16 }}>{(x.spec && x.spec.icon) || "◐"} {x.spec && x.spec.name}</div>
+                  <div className="mt">{(x.spec.entities || []).length} Tabellen · {x.spec.auth ? "mit Login" : "ohne Login"}{x.deploy ? " · online" : ""}</div>
+                </div>
+                <button className="btn sm" onClick={() => { setP(x); setErr(""); setBericht(null); setSchritte([]); setLaufFehler([]); setTab("vorschau"); }}>Öffnen</button>
+                <button className="btn ghost sm" onClick={() => loeschen(x)}>✕</button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  );
+
+  const probleme = cfPruefe(p);
+  return (
+    <>
+      <div className="row" style={{ gap: 8, alignItems: "center" }}>
+        <div style={{ flex: 1 }}>
+          <div className="nm" style={{ fontSize: 18 }}>{p.spec.icon || "◐"} {p.spec.name}</div>
+          <div className="mt">{p.spec.kurz}</div>
+        </div>
+        <button className="btn ghost sm" onClick={() => { setP(null); setWunsch(""); setSchritte([]); setErr(""); setBericht(null); }}>← Alle Apps</button>
+      </div>
+      <div className="seg" style={{ marginTop: 10 }}>
+        <button className={tab === "vorschau" ? "on" : ""} onClick={() => setTab("vorschau")}>Läuft</button>
+        <button className={tab === "teilen" ? "on" : ""} onClick={() => setTab("teilen")}>Rausgeben</button>
+        <button className={tab === "aendern" ? "on" : ""} onClick={() => setTab("aendern")}>Ändern</button>
+        <button className={tab === "dateien" ? "on" : ""} onClick={() => setTab("dateien")}>Dateien</button>
+      </div>
+      {err && <div className="log err" style={{ marginTop: 10 }}>{err}</div>}
+      {info && <div className="log done" style={{ marginTop: 10 }}>{info}</div>}
+
+      {tab === "vorschau" && (
+        <>
+          {p.deploy ? (
+            <>
+              <div style={{ border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden", background: "#fff", marginTop: 10 }}>
+                <iframe key={iframeKey} title="App" src={url} style={{ width: "100%", height: 520, border: "none", display: "block" }} />
+              </div>
+              <div className="row" style={{ gap: 8, marginTop: 10 }}>
+                <a className="btn tox sm" href={url} target="_blank" rel="noopener" style={{ textDecoration: "none" }}>In neuem Tab öffnen</a>
+                <button className="btn ghost sm" onClick={() => setIframeKey((k) => k + 1)}>Neu laden</button>
+              </div>
+              {laufFehler.length > 0 && (
+                <>
+                  <div className="log err" style={{ marginTop: 10 }}>In der App ist ein Fehler aufgetreten:{"\n"}{laufFehler.join("\n")}</div>
+                  <button className="btn sm" onClick={fehlerReparieren}>Agent soll das reparieren</button>
+                </>
+              )}
+              {bericht && <Probelauf bericht={bericht} />}
+            </>
+          ) : (
+            <>
+              <div className="log warn">Diese App läuft noch nicht auf deinem Server.</div>
+              <button className="btn tox" onClick={() => neuDeployen(p)}>Jetzt starten und testen</button>
+            </>
+          )}
+          {probleme.length > 0 && <div className="log warn" style={{ marginTop: 10 }}>Hinweis vom Prüfer: {probleme[0]}</div>}
+        </>
+      )}
+
+      {tab === "teilen" && (
+        <>
+          <span className="lbl">1 · Link (läuft sofort, ohne Installation)</span>
+          {p.deploy ? (
+            <>
+              <div className="log" style={{ wordBreak: "break-all" }}>{url}</div>
+              <div className="row" style={{ gap: 8 }}>
+                <button className="btn tox sm" onClick={() => kopiere(url)}>Link kopieren</button>
+                <a className="btn ghost sm" style={{ textDecoration: "none" }} href={"https://wa.me/?text=" + encodeURIComponent(p.spec.name + ": " + url)} target="_blank" rel="noopener">WhatsApp</a>
+              </div>
+              <img alt="QR-Code" style={{ width: 150, height: 150, background: "#fff", padding: 6, borderRadius: 6, margin: "10px 0" }} src={"https://api.qrserver.com/v1/create-qr-code/?size=500x500&margin=10&data=" + encodeURIComponent(url)} />
+              <div className="log">Server und Datenbank laufen auf deinem Server. {p.spec.auth ? "Wer sich als Erste/r registriert, ist Admin." : ""}</div>
+            </>
+          ) : <div className="log warn">Erst unter „Läuft“ starten.</div>}
+
+          <span className="lbl">2 · Eigenes Projekt (ZIP)</span>
+          <div className="log">Komplettes Projekt zum Mitnehmen: Server, Datenbank, Oberfläche, Docker, Anleitung. Läuft mit <b>node server.js</b> überall (kein npm nötig).</div>
+          <button className="btn tox sm" onClick={() => zipLaden(false)}>ZIP herunterladen</button>
+
+          <span className="lbl">3 · Android-App (APK)</span>
+          <div className="log">GitHub baut die APK für dich, kostenlos. Du brauchst nur einmal einen Schlüssel: github.com/settings/tokens/new → Haken bei <b>repo</b> und <b>workflow</b> → erzeugen → hier einfügen.</div>
+          <input type="password" value={ghToken} placeholder="GitHub-Schlüssel (ghp_…)" onChange={(e) => setGhToken(e.target.value)} />
+          <label style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0", fontSize: 13 }}>
+            <input type="checkbox" checked={ghPrivat} onChange={(e) => setGhPrivat(e.target.checked)} style={{ width: "auto" }} />
+            Repository privat (dann ist der APK-Link nur mit GitHub-Login erreichbar)
+          </label>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn tox sm" onClick={apkBauen} disabled={busy}>{busy ? "läuft …" : "APK bauen lassen"}</button>
+            {p.gh && <button className="btn ghost sm" onClick={apkStatus}>Status prüfen</button>}
+          </div>
+          {ghLog.map((l, i) => <div key={i} className="log">{l}</div>)}
+          {ghStatus && (
+            <div className={"log " + (ghStatus.status === "fertig" ? "done" : ghStatus.status === "fehler" ? "err" : "warn")}>
+              {ghStatus.text}
+              {ghStatus.apk && <><br /><a href={ghStatus.apk} target="_blank" rel="noopener">APK herunterladen</a> · <a href={ghStatus.releases} target="_blank" rel="noopener">Release-Seite</a><br />Auf dem Handy öffnen und „Unbekannte Quellen erlauben“ bestätigen.</>}
+              {ghStatus.status === "fehler" && ghStatus.url && <><br /><a href={ghStatus.url} target="_blank" rel="noopener">Protokoll ansehen</a></>}
+            </div>
+          )}
+          {p.gh && !ghStatus && <div className="log">Letzter Bau: github.com/{p.gh.owner}/{p.gh.repo}</div>}
+          <div className="log warn">Die Android-App ist ein Fenster auf deine laufende App (inkl. Server und Daten). iPhone: Link in Safari öffnen → Teilen → „Zum Home-Bildschirm“. Eine iOS-App für den App Store braucht einen Mac und ein Apple-Entwicklerkonto.</div>
+        </>
+      )}
+
+      {tab === "aendern" && (
+        <>
+          <span className="lbl">Was soll anders werden?</span>
+          <textarea value={aendern} placeholder="z.B. Füg ein Feld „Priorität“ hinzu, eine Statistik pro Monat und einen Filter nach Kategorie." onChange={(e) => setAendern(e.target.value)} />
+          <button className="btn tox" onClick={aendernLos} disabled={busy || !aendern.trim()}>Änderung einbauen und neu starten</button>
+          <div className="log" style={{ marginTop: 10 }}>Deine Daten bleiben erhalten. Wird die App nicht mehr gebraucht: unter „Alle Apps“ mit ✕ löschen.</div>
+        </>
+      )}
+
+      {tab === "dateien" && (
+        <>
+          <div className="seg" style={{ marginTop: 10 }}>
+            {["public/index.html", "public/style.css", "public/app.js"].concat(p.logic ? ["logic.js"] : []).concat(["app.spec.json"]).map((n) => (
+              <button key={n} className={datei === n ? "on" : ""} onClick={() => setDatei(n)}>{n.replace("public/", "")}</button>
+            ))}
+          </div>
+          <pre className="log" style={{ maxHeight: 460, overflow: "auto", fontSize: 11, whiteSpace: "pre-wrap", marginTop: 6 }}>{datei === "logic.js" ? p.logic : datei === "app.spec.json" ? JSON.stringify(p.spec, null, 2) : (p.files[datei] || "")}</pre>
+          <button className="btn ghost sm" onClick={() => kopiere(datei === "logic.js" ? p.logic : datei === "app.spec.json" ? JSON.stringify(p.spec, null, 2) : (p.files[datei] || ""))}>Datei kopieren</button>
+        </>
+      )}
+    </>
+  );
+}
+
+function Probelauf({ bericht }) {
+  return (
+    <>
+      <span className="lbl">Probelauf auf dem Server</span>
+      {bericht.map((b, i) => <div key={i} className={"log " + (b.ok ? "done" : "err")}>{b.ok ? "✓ " : "✕ "}{b.text}</div>)}
+    </>
+  );
+}
+
+/* ---------------- CODE-SCHMIEDE: einfache Einzeldatei ---------------- */
+function CodeForgeEinfach({ agents, models }) {
   const [wunsch, setWunsch] = useState("");
   const [art, setArt] = useState("web");
   const [busy, setBusy] = useState(false);
