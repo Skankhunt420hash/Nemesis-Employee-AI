@@ -58,3 +58,10 @@ Daten liegen in `sync-data/_betrieb-<id>.json`. Seiten-Quellen: `app/betrieb-sei
 - Laufzeit `app/laufzeit/runtime.js` (keine Abhaengigkeiten): REST-API pro Tabelle, Login (scrypt, Sitzungen), Besitzer-Filter, Validierung, JSON-Datenbank, Static-Hosting. Wird per `build/einbetten.py` in `nemesis-app.js` und `nemesis-app.html` eingebettet; dieselbe Datei ist im ZIP als `server.js`.
 - Hosting: `/x/<name>/` (oeffentlich, CSP-Sandbox), privat `/apps/deploy|liste|loeschen|export`. Vor dem Livegang laeuft ein echter Probelauf (CRUD je Tabelle, Login, Frontend); schlaegt er fehl, bleibt die alte Version live. Daten bleiben bei Updates erhalten. `logic.js` laeuft in einer vm-Sandbox (nur `ctx.db`).
 - Rausgeben: Link/QR, ZIP (`node server.js`, Dockerfile, README), Android-APK ueber GitHub Actions (Capacitor, ein Commit per Git-Data-API, Release mit `app-debug.apk`).
+
+## Telegram-Zentrale (OpenClaw-Prinzip)
+- Lab: Werkstatt -> Telegram-Zentrale. Bot-Schluessel von @BotFather einfuegen, Link antippen, Start druecken: gekoppelt (Einmal-Code, 30 Min, 5 Fehlversuche -> Sperre). Fremde Chats werden ignoert.
+- Server pollt Telegram selbst (nur ausgehend, kein Webhook/Port noetig), Daten in `sync-data/_telegram.json` (chmod 600).
+- Agenten (aus dem Lab uebertragen) antworten mit Werkzeugen: Notizen, Web lesen/suchen (SSRF-Schutz: keine internen Adressen, nur Port 80/443), rechnen, Erinnerungen, Jobs (Zeitplan, Zuerich-Zeit), Betriebe verwalten, Apps lesen, andere Agenten fragen.
+- Nach Web-Zugriff sind schreibende Werkzeuge im selben Auftrag gesperrt (Schutz vor Prompt-Injection). Tageslimit fuer KI-Aufrufe einstellbar.
+- Chat-Befehle: /agenten /agent /jobs /job /notizen /neu /stopp /status /code /entkoppeln, `@Name Frage`.

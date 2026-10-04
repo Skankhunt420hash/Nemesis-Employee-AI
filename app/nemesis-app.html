@@ -2938,13 +2938,14 @@ const TOOLS = [
   { id: "repair", n: "Agent Repair", d: "Vollständige Diagnose: Gesundheits-Score, kritische Probleme, automatische Reparatur.", ic: "⚕" },
   { id: "marketplace", n: "Agent Marketplace", d: "Agenten exportieren, importieren und aus fertigen Templates starten.", ic: "⇄" },
   { id: "codeforge", n: "Code-Schmiede", d: "Beschreib eine App — der Agent baut sie wirklich: Server, Datenbank, Login, Oberfläche. Läuft live auf deinem Server, als ZIP oder als Android-App.", ic: "◐" },
+  { id: "telegram", n: "Telegram-Zentrale", d: "Steuere deine Agenten per Telegram: Befehle, Notizen, Recherche, Betriebe verwalten und Zeitpläne, die von selbst laufen.", ic: "✈" },
   { id: "wipe", n: "Totalreset", d: "Löscht alles im Labor. Kein Zurück.", ic: "✖", danger: true },
 ];
 
 function Workshop(ctx) {
   const { tool, setTool } = ctx;
   if (tool) {
-    const T = { breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: KundenDossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
+    const T = { breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: KundenDossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, telegram: TelegramZentrale, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
     return (<><button className="back" onClick={() => setTool(null)}>← Werkbank</button><T {...ctx} /></>);
   }
   return (
@@ -5933,6 +5934,190 @@ Strenge Regeln:
           <div className="log warn" style={{ marginTop: 12 }}>
             Das ist eine fertige Web-App in einer Datei. Sie läuft in jedem Browser und lässt sich wie deine Nemesis-App über den Droplet ins Netz stellen oder mit PWABuilder in eine Android-App verpacken.
           </div>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ---------------- TELEGRAM-ZENTRALE (Agenten per Telegram steuern, Zeitplaene, Automatik) ---------------- */
+const TGJ_VORLAGEN = [
+  { name: "Morgen-Briefing", wann: "werktags 07:30", aufgabe: "Gib mir ein kurzes Briefing fuer heute: Datum, meine Notizen, und fuer alle Betriebe was heute wichtig ist (Reservierungen, Lager unter Mindestmenge, offene Anfragen). Maximal 12 Zeilen." },
+  { name: "Lager-Check", wann: "taeglich 16:00", aufgabe: "Pruef bei allen Betrieben das Lager. Melde nur, was unter der Mindestmenge ist, mit Vorschlag was zu bestellen ist. Wenn alles ok ist, sag das in einem Satz." },
+  { name: "Wochenrueckblick", wann: "woechentlich fr 17:00", aufgabe: "Mach einen kurzen Wochenrueckblick: was lief, was ist offen, was sollte ich naechste Woche anpacken. Nutze meine Notizen und die Betriebsdaten." },
+];
+const tgZeit = (ms) => { if (!ms) return "–"; const d = new Date(ms); return d.toLocaleString("de-CH", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); };
+
+function TelegramZentrale({ agents }) {
+  const [st, setSt] = useState(null);
+  const [fehler, setFehler] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState("");
+  const [meld, setMeld] = useState("");
+  const [neu, setNeu] = useState({ name: "", art: "agent", wann: "taeglich 08:00", aufgabe: "", agent: "" });
+  const [zeigeNeu, setZeigeNeu] = useState(false);
+  const [limit, setLimit] = useState("");
+  const aktiv = useRef(true);
+  useEffect(() => () => { aktiv.current = false; }, []);
+
+  const laden = async () => {
+    try { const d = await wApi("/telegram/status"); if (aktiv.current) { setSt(d); setFehler(""); } }
+    catch (e) { if (aktiv.current) setFehler(e.message === "KEIN_SERVER" ? "Kein Nemesis-Server verbunden (Zahnrad)." : e.message === "ALT" ? "Der Server kennt die Telegram-Zentrale noch nicht: im Zahnrad „Server aktualisieren“, 5 Minuten warten." : e.message); }
+  };
+  useEffect(() => { laden(); const t = setInterval(laden, 4000); return () => clearInterval(t); }, []);
+  const hinweis = (t) => { setMeld(t); setTimeout(() => { if (aktiv.current) setMeld(""); }, 4000); };
+  const tu = async (name, f) => { setBusy(name); setFehler(""); try { await f(); await laden(); } catch (e) { setFehler(e.message); } if (aktiv.current) setBusy(""); };
+
+  const rosterBody = () => ({
+    agenten: agents.slice(0, 40).map((a) => ({ id: a.id, name: a.name, info: [a.branche, a.funktion].filter(Boolean).join(" · ").slice(0, 60), prompt: compilePrompt(a) })),
+  });
+  const agentenSenden = () => tu("agenten", async () => { const r = await wPost("/telegram/agenten", rosterBody()); hinweis(r.anzahl + " Agenten sind jetzt in Telegram verfügbar."); });
+  const verbinden = () => tu("verbinden", async () => {
+    const r = await wPost("/telegram/verbinden", { token: token.trim() });
+    setToken(""); if (agents.length) await wPost("/telegram/agenten", rosterBody());
+    hinweis("Bot @" + r.bot.username + " verbunden.");
+  });
+  const neuerCode = () => tu("code", async () => { await wPost("/telegram/code", {}); });
+  const jobAnlegen = () => tu("job", async () => {
+    await wPost("/telegram/job", { aktion: "neu", name: neu.name, art: neu.art, wann: neu.wann, aufgabe: neu.aufgabe, agent: neu.agent });
+    setNeu({ name: "", art: "agent", wann: "taeglich 08:00", aufgabe: "", agent: "" }); setZeigeNeu(false); hinweis("Job angelegt.");
+  });
+  const jobAktion = (id, aktion) => tu("job-" + id, async () => { await wPost("/telegram/job", { aktion, id }); });
+
+  if (!st) return <div className="log">{fehler || "Lade …"}</div>;
+  const bot = st.bots[0];
+  const gekoppelt = st.gekoppelt > 0;
+  const link = bot && st.code ? "https://t.me/" + bot.username + "?start=" + st.code : "";
+
+  return (
+    <>
+      <div className="log">Steuere deine Agenten per Telegram: schreib dem Bot, er führt aus, merkt sich Dinge, recherchiert, verwaltet deine Betriebe und arbeitet nach Zeitplan von selbst. Nur dein gekoppelter Chat darf etwas.</div>
+      {fehler && <div className="log err" style={{ marginTop: 10 }}>{fehler}</div>}
+      {meld && <div className="log done" style={{ marginTop: 10 }}>{meld}</div>}
+
+      <span className="lbl">1 · Bot verbinden</span>
+      {!bot ? (
+        <>
+          <div className="log">In Telegram <b>@BotFather</b> öffnen → <b>/newbot</b> → Namen wählen → den langen Schlüssel kopieren und hier einfügen.</div>
+          <input type="password" value={token} placeholder="123456789:AAH…" onChange={(e) => setToken(e.target.value)} />
+          <div style={{ height: 10 }} />
+          <button className="btn tox" onClick={verbinden} disabled={busy === "verbinden" || token.trim().length < 20}>{busy === "verbinden" ? "verbinde …" : "Bot verbinden"}</button>
+        </>
+      ) : (
+        <div className={"log " + (bot.fehler ? "err" : "done")}>
+          ✓ @{bot.username} {bot.laeuft ? "läuft" : "gestoppt"}{bot.fehler ? " · " + bot.fehler : ""}
+          <div className="row" style={{ gap: 8, marginTop: 8 }}>
+            <button className="btn ghost sm" onClick={() => { if (window.confirm("Bot wirklich trennen?")) tu("trennen", () => wPost("/telegram/trennen", { botId: bot.id })); }}>Trennen</button>
+          </div>
+        </div>
+      )}
+
+      {bot && (
+        <>
+          <span className="lbl">2 · Mit deinem Handy koppeln</span>
+          {gekoppelt ? (
+            <>
+              <div className="log done">✓ {st.gekoppelt} Chat{st.gekoppelt > 1 ? "s" : ""} gekoppelt – der Bot hört nur auf {st.gekoppelt > 1 ? "diese" : "diesen"}.</div>
+              <div className="row" style={{ gap: 8 }}>
+                <button className="btn tox sm" onClick={() => tu("test", async () => { await wPost("/telegram/senden", {}); hinweis("Test-Nachricht ist unterwegs."); })} disabled={busy === "test"}>Test-Nachricht senden</button>
+                <button className="btn ghost sm" onClick={neuerCode}>Weiteres Gerät koppeln</button>
+                <button className="btn ghost sm" onClick={() => { if (window.confirm("Alle Chats sperren?")) tu("ent", () => wPost("/telegram/entkoppeln", {})); }}>Alle sperren</button>
+              </div>
+            </>
+          ) : (
+            <div className="log warn">Noch nicht gekoppelt. Tippe auf den Knopf, in Telegram „Start“ drücken – fertig.</div>
+          )}
+          {link ? (
+            <>
+              <a className="btn tox" style={{ textDecoration: "none", display: "inline-block", marginTop: 8 }} href={link} target="_blank" rel="noopener">In Telegram öffnen und Start drücken</a>
+              <div className="log" style={{ marginTop: 8 }}>Oder dem Bot schreiben: <b>/start {st.code}</b> (30 Min gültig, einmal benutzbar)</div>
+            </>
+          ) : !gekoppelt && <button className="btn" style={{ marginTop: 8 }} onClick={neuerCode}>Kopplungs-Code erzeugen</button>}
+
+          <span className="lbl">3 · Deine Agenten in Telegram</span>
+          <div className="log">{st.agenten.length - 1} Lab-Agent(en) übertragen: {st.agenten.slice(1).map((a) => a.name).join(", ") || "noch keine"}. Im Chat: <b>/agenten</b> zum Wechseln, <b>@Name Frage</b> für eine einzelne Frage.</div>
+          <button className="btn sm" onClick={agentenSenden} disabled={busy === "agenten" || !agents.length}>{busy === "agenten" ? "sende …" : "Agenten aktualisieren"}</button>
+          {st.agenten.length > 1 && (
+            <>
+              <span className="lbl">Dieser Bot spricht standardmäßig als</span>
+              <select value={bot.agent || ""} onChange={(e) => tu("ba", () => wPost("/telegram/einstellungen", { botAgent: { botId: bot.id, agent: e.target.value } }))}>
+                <option value="">Nemesis (Allround-Assistent)</option>
+                {st.agenten.slice(1).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </>
+          )}
+
+          <span className="lbl">4 · Automatik: Jobs & Erinnerungen</span>
+          {st.jobs.length === 0 && <div className="log">Noch keine Jobs. Leg einen an – oder schreib dem Bot z.B. „Jeden Werktag um 7:30 ein Briefing zu Lager und Reservierungen“.</div>}
+          {st.jobs.map((j) => (
+            <div key={j.id} className="card">
+              <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="nm" style={{ fontSize: 15 }}>{j.aktiv ? "⏰" : "⏸"} {j.name}</div>
+                  <div className="mt">{j.wann} · {j.art === "erinnerung" ? "Erinnerung" : "Agent: " + ((st.agenten.find((a) => a.id === j.agent) || {}).name || "Nemesis")}{j.aktiv && j.naechste ? " · nächstes Mal " + tgZeit(j.naechste) : ""}</div>
+                  <div className="dsc" style={{ fontSize: 12 }}>{j.aufgabe.slice(0, 140)}</div>
+                  {j.fehler && <div className="log err" style={{ marginTop: 6 }}>{j.fehler}</div>}
+                  {j.ergebnis && !j.fehler && <div className="mt" style={{ marginTop: 6 }}>Zuletzt: {j.ergebnis.replace(/\s+/g, " ").slice(0, 110)}</div>}
+                </div>
+              </div>
+              <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                {j.art === "agent" && <button className="btn sm" onClick={() => jobAktion(j.id, "jetzt")} disabled={j.laeuft || !gekoppelt}>{j.laeuft ? "läuft …" : "Jetzt ausführen"}</button>}
+                <button className="btn ghost sm" onClick={() => jobAktion(j.id, j.aktiv ? "aus" : "an")}>{j.aktiv ? "Pausieren" : "Aktivieren"}</button>
+                <button className="btn ghost sm" onClick={() => jobAktion(j.id, "loeschen")}>Löschen</button>
+              </div>
+            </div>
+          ))}
+          {!zeigeNeu ? (
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <button className="btn tox sm" onClick={() => setZeigeNeu(true)}>+ Neuer Job</button>
+              {TGJ_VORLAGEN.map((v) => <button key={v.name} className="btn ghost sm" onClick={() => { setNeu({ name: v.name, art: "agent", wann: v.wann, aufgabe: v.aufgabe, agent: "" }); setZeigeNeu(true); }}>{v.name}</button>)}
+            </div>
+          ) : (
+            <div className="card">
+              <div className="seg">
+                <button className={neu.art === "agent" ? "on" : ""} onClick={() => setNeu({ ...neu, art: "agent" })}>Agent erledigt Aufgabe</button>
+                <button className={neu.art === "erinnerung" ? "on" : ""} onClick={() => setNeu({ ...neu, art: "erinnerung" })}>Nur erinnern</button>
+              </div>
+              <span className="lbl">Name</span>
+              <input value={neu.name} placeholder="z.B. Morgen-Briefing" onChange={(e) => setNeu({ ...neu, name: e.target.value })} />
+              <span className="lbl">Wann</span>
+              <select value={/^(taeglich|werktags|woechentlich|alle|stuendlich|einmalig)/.test(neu.wann) ? neu.wann.split(" ")[0] === "stuendlich" ? "stuendlich" : neu.wann.split(" ")[0] : "taeglich"}
+                onChange={(e) => { const v = e.target.value; const zeit = (neu.wann.match(/(\d{1,2}:\d{2})$/) || [])[1] || "08:00"; setNeu({ ...neu, wann: v === "stuendlich" ? "stuendlich" : v === "alle" ? "alle 60 min" : v === "woechentlich" ? "woechentlich mo " + zeit : v === "einmalig" ? "einmalig " + new Date(Date.now() + 86400000).toISOString().slice(0, 10) + " " + zeit : v + " " + zeit }); }}>
+                <option value="taeglich">Jeden Tag</option><option value="werktags">Montag bis Freitag</option><option value="woechentlich">Jede Woche</option>
+                <option value="stuendlich">Jede Stunde</option><option value="alle">Alle … Minuten/Stunden</option><option value="einmalig">Einmalig</option>
+              </select>
+              <input value={neu.wann} style={{ marginTop: 6 }} onChange={(e) => setNeu({ ...neu, wann: e.target.value })} />
+              <div className="mt" style={{ marginTop: 4 }}>Format: taeglich 08:00 · werktags 07:30 · woechentlich mo 09:00 · alle 30 min · einmalig 2026-10-05 09:30</div>
+              <span className="lbl">{neu.art === "erinnerung" ? "Text der Erinnerung" : "Aufgabe für den Agenten"}</span>
+              <textarea value={neu.aufgabe} style={{ minHeight: 90 }} placeholder={neu.art === "erinnerung" ? "Mehl bestellen" : "Pruef das Lager bei allen Betrieben und melde was bestellt werden muss."} onChange={(e) => setNeu({ ...neu, aufgabe: e.target.value })} />
+              {neu.art === "agent" && st.agenten.length > 1 && (
+                <>
+                  <span className="lbl">Wer erledigt es?</span>
+                  <select value={neu.agent} onChange={(e) => setNeu({ ...neu, agent: e.target.value })}>
+                    <option value="">Nemesis (Allround-Assistent)</option>
+                    {st.agenten.slice(1).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </>
+              )}
+              <div className="row" style={{ gap: 8, marginTop: 10 }}>
+                <button className="btn tox sm" onClick={jobAnlegen} disabled={busy === "job" || !neu.aufgabe.trim()}>Speichern</button>
+                <button className="btn ghost sm" onClick={() => setZeigeNeu(false)}>Abbrechen</button>
+              </div>
+            </div>
+          )}
+
+          <span className="lbl">Was der Bot kann</span>
+          <div className="log">Notizen merken & abrufen · Webseiten lesen und im Netz suchen · Rechnen · Erinnerungen und Jobs anlegen · Betriebe verwalten (Lager, Reservierungen, Bestellungen) · andere Agenten fragen · Apps aus der Code-Schmiede auslesen. Nach einem Web-Zugriff sind schreibende Aktionen im selben Auftrag gesperrt (Schutz vor untergeschobenen Anweisungen).</div>
+
+          <span className="lbl">Verbrauch & Limit</span>
+          <div className="log">Heute {st.verbrauch.n} von {st.einst.maxAufrufeProTag} KI-Aufrufen. {st.jetzt}</div>
+          <div className="row" style={{ gap: 8 }}>
+            <input style={{ maxWidth: 120 }} value={limit} placeholder={String(st.einst.maxAufrufeProTag)} onChange={(e) => setLimit(e.target.value.replace(/\D/g, ""))} />
+            <button className="btn ghost sm" disabled={!limit} onClick={() => tu("lim", async () => { await wPost("/telegram/einstellungen", { maxAufrufeProTag: +limit }); setLimit(""); })}>Limit setzen</button>
+          </div>
+
+          <span className="lbl">Protokoll</span>
+          {st.log.length === 0 ? <div className="log">Noch nichts.</div> : st.log.slice(0, 12).map((l, i) => <div key={i} className="log" style={{ fontSize: 12 }}>{tgZeit(l.t)} · {l.text}</div>)}
         </>
       )}
     </>
