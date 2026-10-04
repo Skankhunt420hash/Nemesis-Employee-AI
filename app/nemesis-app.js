@@ -400,7 +400,7 @@ async function behandle(req, res, url, CORS) {
     try { return await betriebOeffentlich(p, req, res, url, CORS); }
     catch (e) { console.warn("[betrieb] " + e.message); json(res, 500, { error: "Fehler" }, {}); return true; }
   }
-  const unsere = p.startsWith("/betrieb/") || p.startsWith("/apps/") || p.startsWith("/telegram/") || p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status" || p === "/update"
+  const unsere = p.startsWith("/betrieb/") || p.startsWith("/apps/") || p.startsWith("/telegram/") || p.startsWith("/bg/") || p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status" || p === "/update"
               || p === "/manifest.webmanifest" || p === "/icon.svg" || p === "/welt" || p.startsWith("/welt/");
   if (!unsere) return false;
 
@@ -427,6 +427,11 @@ async function behandle(req, res, url, CORS) {
     res.end(ICON); return true;
   }
 
+  if (p.startsWith("/bg/")) {
+    if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
+    try { return await bgIntern(p, req, res, url, CORS); }
+    catch (e) { console.warn("[bg] " + e.message); json(res, 500, { error: "Auftrags-Fehler: " + e.message }, CORS); return true; }
+  }
   if (p.startsWith("/telegram/")) {
     if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
     try { return await tgIntern(p, req, res, url, CORS); }
@@ -2654,6 +2659,11 @@ const TG_TOOLS = {
       const lim = Math.min(Math.max(+a.limit || 30, 1), 100);
       return { gesamt: t.length, zeilen: t.slice(-lim) };
     } },
+  app_bauen: { schreibend: true, doku: '{"werkzeug":"app_bauen","args":{"wunsch":"Haushaltsbuch mit Login: Buchungen mit Betrag, Kategorie und Datum, Monatssumme"}} - baut eine komplette App (Server, Datenbank, Login, Oberflaeche) im Hintergrund und meldet sich hier, wenn sie laeuft',
+    fn: (a) => { const w = String(a.wunsch || "").trim(); if (w.length < 8) throw new Error("wunsch zu kurz"); const j = bgNeu("app", { wunsch: w.slice(0, 3000) }, wKurz(w, 60)); return { auftrag: j.id, hinweis: "Laeuft im Hintergrund, die Meldung kommt hier." }; } },
+  mission_starten: { schreibend: true, doku: '{"werkzeug":"mission_starten","args":{"agent":"Lena","ziel":"Erstelle ein Angebot fuer ...","stunden":2}} - ein Agent arbeitet einen groesseren Auftrag in Schritten im Hintergrund ab und meldet das Ergebnis hier',
+    fn: (a) => { const ag = tgAgentFinden(a.agent) || tgStandardAgent(); const z = String(a.ziel || "").trim(); if (z.length < 8) throw new Error("ziel zu kurz"); const j = bgNeu("mission", { agent: { id: ag.id, name: ag.name, prompt: ag.prompt }, ziel: z.slice(0, 3000), stunden: +a.stunden || 2 }, wKurz(z, 70)); return { auftrag: j.id, agent: ag.name, hinweis: "Laeuft im Hintergrund, das Ergebnis kommt hier." }; } },
+  auftraege_liste: { doku: '{"werkzeug":"auftraege_liste","args":{}} - Stand der Hintergrund-Auftraege (Apps, Missionen)', fn: () => ({ auftraege: bgZustand().jobs.slice(-8).reverse().map((j) => ({ id: j.id, titel: j.titel, typ: j.typ, status: j.status, schritt: (j.fortschritt[j.fortschritt.length - 1] || {}).t || "", fehler: j.fehler || undefined })) }) },
   agent_fragen: { schreibend: true, doku: '{"werkzeug":"agent_fragen","args":{"agent":"Lena","frage":"..."}} - fragt einen anderen deiner Agenten und gibt dir seine Antwort', fn: async (a, ctx) => {
     if ((ctx.tiefe || 0) >= 1) throw new Error("Agenten duerfen nur eine Ebene tief weiterfragen");
     const ag = tgAgentFinden(a.agent); if (!ag) throw new Error("Agent nicht gefunden. Vorhanden: " + tgAgenten().map((x) => x.name).join(", "));
@@ -2997,8 +3007,455 @@ async function tgIntern(p, req, res, url, CORS) {
   json(res, 404, { error: "Unbekannt" }, CORS); return true;
 }
 
+
+/* ================= HINTERGRUND-AUFTRAEGE =================
+   Lange Arbeiten (Apps bauen, Missionen) laufen auf dem Server weiter, auch wenn die App geschlossen wird.
+   Fortschritt wird gespeichert; nach einem Neustart machen unterbrochene Auftraege selbst weiter. */
+const BG_DATEI = path.join(SYNC_DIR, "_bg.json");
+const BGG = global.__nxApp.bg = global.__nxApp.bg || { state: null, lauf: {}, speichern: null };
+function bgZustand() {
+  if (BGG.state) return BGG.state;
+  let s = {}; try { s = JSON.parse(fs.readFileSync(BG_DATEI, "utf8")); } catch (e) {}
+  BGG.state = Object.assign({ v: 1, jobs: [], basis: "" }, s);
+  for (const j of BGG.state.jobs) if (j.status === "laeuft") { j.status = "wartet"; j.versuche = (j.versuche || 0) + 1; if (j.versuche > 2) { j.status = "fehler"; j.fehler = "Mehrfach unterbrochen (Server-Neustart)."; j.ende = Date.now(); } }
+  return BGG.state;
+}
+function bgSpeichern(sofort) {
+  const tun = () => {
+    BGG.speichern = null;
+    try { fs.mkdirSync(SYNC_DIR, { recursive: true }); fs.writeFileSync(BG_DATEI + ".tmp", JSON.stringify(bgZustand())); fs.renameSync(BG_DATEI + ".tmp", BG_DATEI); }
+    catch (e) { console.warn("[bg] speichern: " + e.message); }
+  };
+  if (sofort) { if (BGG.speichern) clearTimeout(BGG.speichern); return tun(); }
+  if (!BGG.speichern) { BGG.speichern = setTimeout(tun, 600); BGG.speichern.unref && BGG.speichern.unref(); }
+}
+function bgNeu(typ, payload, titel) {
+  const s = bgZustand();
+  if (s.jobs.filter((j) => j.status === "wartet" || j.status === "laeuft").length >= 8) throw new Error("Es laufen schon 8 Auftraege. Warte, bis einer fertig ist.");
+  if (payload && /^https?:\/\/[A-Za-z0-9.\-:]{3,80}$/.test(payload.basis || "")) s.basis = payload.basis;
+  const j = { id: "b" + crypto.randomBytes(4).toString("hex"), typ, titel: wKurz(titel, 90), status: "wartet", erstellt: Date.now(), start: 0, ende: 0, fortschritt: [], versuche: 0, payload: payload || {}, ergebnis: null, fehler: "" };
+  s.jobs.push(j);
+  if (s.jobs.length > 40) s.jobs = s.jobs.filter((x, i) => i >= s.jobs.length - 40 || x.status === "wartet" || x.status === "laeuft");
+  bgSpeichern(true); bgAnstossen();
+  return j;
+}
+function bgAnstossen() {
+  const s = bgZustand();
+  let n = s.jobs.filter((j) => j.status === "laeuft").length;
+  for (const j of s.jobs) {
+    if (n >= 2) break;
+    if (j.status !== "wartet") continue;
+    j.status = "laeuft"; j.start = j.start || Date.now(); n++;
+    bgSpeichern(true);
+    bgLauf(j).catch((e) => console.warn("[bg] " + e.message));
+  }
+}
+const bgS = (job, text) => { job.fortschritt.push({ t: String(text).slice(0, 200), ok: null }); if (job.fortschritt.length > 60) job.fortschritt = job.fortschritt.slice(-60); bgSpeichern(); };
+const bgOk = (job, ok) => { const l = job.fortschritt[job.fortschritt.length - 1]; if (l) l.ok = ok === undefined ? true : ok; bgSpeichern(); };
+function bgPruefeAbbruch(job) { if (job.abbruch) throw new Error("Abgebrochen"); }
+async function bgLlm(job, system, user, max, art) {
+  let letzter;
+  for (let v = 0; v < 3; v++) {
+    bgPruefeAbbruch(job);
+    try {
+      const r = await global.__nxApp.kern.rotiere({ system, messages: [{ role: "user", content: user }], max_tokens: max || 2000, art: art || "normal" });
+      if (r.status === 200 && String(r.body.text || "").trim()) return String(r.body.text);
+      letzter = new Error((r.body && r.body.error) || "Leere Antwort vom Modell");
+    } catch (e) { letzter = e; }
+    if (/Schluessel|Kein Zugang|Guthaben/i.test(String(letzter && letzter.message))) break;
+    await sleepMs(v === 0 ? 4000 : 15000);
+  }
+  throw letzter || new Error("Kein Modell erreichbar");
+}
+async function bgLauf(job) {
+  try {
+    if (job.typ === "app") await bgApp(job);
+    else if (job.typ === "mission") await bgMission(job);
+    else throw new Error("Unbekannter Auftragstyp");
+    job.status = "fertig"; job.fehler = "";
+  } catch (e) {
+    job.status = job.abbruch ? "abgebrochen" : "fehler"; job.fehler = String(e.message || e).slice(0, 500);
+    const l = job.fortschritt[job.fortschritt.length - 1]; if (l && l.ok === null) l.ok = false;
+  }
+  job.ende = Date.now();
+  if (job.payload) delete job.payload.projekt;
+  bgSpeichern(true);
+  try { await bgMelden(job); } catch (e) {}
+  bgAnstossen();
+}
+async function bgMelden(job) {
+  const t = TGG && tgZustand ? tgZustand() : null; if (!t || !t.bots.length || !t.erlaubt.length) return;
+  const bot = t.bots[0], basis = (job.payload && job.payload.basis) || bgZustand().basis || "";
+  let text;
+  if (job.status === "fertig" && job.typ === "app") text = "✅ App \"" + ((job.ergebnis && job.ergebnis.name) || job.titel) + "\" ist fertig und läuft:\n" + basis + "/x/" + job.ergebnis.slug + "/";
+  else if (job.status === "fertig") text = "✅ Mission fertig: " + job.titel + "\n\n" + String((job.ergebnis && job.ergebnis.text) || "").slice(0, 3200);
+  else if (job.status === "fehler") text = "⚠️ Auftrag \"" + job.titel + "\" ist fehlgeschlagen: " + job.fehler + "\nIm Lab kannst du ihn mit «Nochmal» neu starten.";
+  else return;
+  for (const c of t.erlaubt) await tgSenden(bot, c, text).catch(() => {});
+}
+
+/* ----- App bauen / aendern / reparieren (Pipeline wie in der Code-Schmiede, aber auf dem Server) ----- */
+const CF_API_DOK = [
+  "VORHANDENE FUNKTIONEN — window.API ist schon geladen (api.js). NICHT neu schreiben, NICHT fetch() fuer die eigene API benutzen:",
+  "- API.list(res, {q, sort, limit, offset, <feldname>: wert}) -> Promise<{items:[...], total}>   res = Plural-Name der Tabelle; sort z.B. \"-id\" (neueste zuerst), \"titel\", \"-created\"",
+  "- API.get(res, id) / API.create(res, obj) / API.update(res, id, obj) (nur geaenderte Felder) / API.remove(res, id) -> Promise",
+  "- API.call(methode, pfad, body) fuer eigene Routen, z.B. API.call(\"GET\", \"/stats\") (Pfad OHNE /api-Praefix) -> Promise<Antwort>",
+  "- Nur wenn auth=true: API.register(email, passwort, name), API.login(email, passwort), API.logout(), API.me() -> Promise<user|null>, API.user (aktueller Nutzer oder null). Bei abgelaufener Sitzung feuert window das Event \"api-logout\" -> Login-Ansicht zeigen.",
+  "- Jede Funktion lehnt bei Fehlern mit Error(message) ab; message ist deutsch und darf dem Nutzer direkt angezeigt werden.",
+  "- Datensaetze haben id, created, updated (ISO-Text); bool-Felder sind true/false, number-Felder Zahlen, date-Felder ISO-Text (YYYY-MM-DD).",
+].join("\n");
+
+const cfApiJs = () => [
+  "/* api.js — Client fuer das Backend. Wird automatisch erzeugt, nicht bearbeiten. */",
+  "(function () {",
+  "  var BASE = window.NEMESIS_API_BASE ? String(window.NEMESIS_API_BASE).replace(/\\/?$/, \"/\") : \"\";",
+  "  var mem = {}; try { mem = JSON.parse(window.name || \"{}\") || {}; } catch (e) { mem = {}; }",
+  "  function get(k) { try { var v = localStorage.getItem(k); if (v !== null) return v; } catch (e) {} return mem[k] || null; }",
+  "  function set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} if (v === null) delete mem[k]; else mem[k] = v; try { window.name = JSON.stringify(mem); } catch (e) {} }",
+  "  var API = { user: null };",
+  "  function req(method, path, body) {",
+  "    var h = { \"Content-Type\": \"application/json\" }, t = get(\"api_token\");",
+  "    if (t) h.Authorization = \"Bearer \" + t;",
+  "    return fetch(BASE + \"api\" + path, { method: method, headers: h, body: body === undefined || method === \"GET\" ? undefined : JSON.stringify(body) })",
+  "      .catch(function () { throw new Error(\"Keine Verbindung zum Server\"); })",
+  "      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) {",
+  "        if (!r.ok) {",
+  "          if (r.status === 401 && t && path.indexOf(\"/auth/\") !== 0) { set(\"api_token\", null); API.user = null; try { window.dispatchEvent(new Event(\"api-logout\")); } catch (e) {} }",
+  "          var e = new Error(d.error || (\"Fehler \" + r.status)); e.status = r.status; throw e;",
+  "        }",
+  "        return d;",
+  "      }); });",
+  "  }",
+  "  function qs(o) { var p = []; for (var k in (o || {})) if (o[k] !== undefined && o[k] !== null && o[k] !== \"\") p.push(encodeURIComponent(k) + \"=\" + encodeURIComponent(o[k])); return p.length ? \"?\" + p.join(\"&\") : \"\"; }",
+  "  API.list = function (res, o) { return req(\"GET\", \"/\" + res + qs(o)); };",
+  "  API.get = function (res, id) { return req(\"GET\", \"/\" + res + \"/\" + id); };",
+  "  API.create = function (res, obj) { return req(\"POST\", \"/\" + res, obj || {}); };",
+  "  API.update = function (res, id, obj) { return req(\"PUT\", \"/\" + res + \"/\" + id, obj || {}); };",
+  "  API.remove = function (res, id) { return req(\"DELETE\", \"/\" + res + \"/\" + id); };",
+  "  API.call = function (method, path, body) { return req(String(method).toUpperCase(), (path.charAt(0) === \"/\" ? \"\" : \"/\") + path, body); };",
+  "  function sitzung(d) { set(\"api_token\", d.token); API.user = d.user; return d.user; }",
+  "  API.register = function (email, pw, name) { return req(\"POST\", \"/auth/register\", { email: email, password: pw, name: name }).then(sitzung); };",
+  "  API.login = function (email, pw) { return req(\"POST\", \"/auth/login\", { email: email, password: pw }).then(sitzung); };",
+  "  API.logout = function () { return req(\"POST\", \"/auth/logout\", {}).catch(function () {}).then(function () { set(\"api_token\", null); API.user = null; }); };",
+  "  API.me = function () { if (!get(\"api_token\")) return Promise.resolve(null); return req(\"GET\", \"/auth/me\").then(function (d) { API.user = d.user; return d.user; }).catch(function () { set(\"api_token\", null); API.user = null; return null; }); };",
+  "  window.API = API;",
+  "})();",
+].join("\n");
+
+
+const cfDebugSnippet = "<script>(function(){function s(m){try{parent.postMessage({nxFehler:String(m).slice(0,400)},'*')}catch(e){}}window.addEventListener('error',function(e){s((e.message||'Fehler')+(e.lineno?' (Zeile '+e.lineno+')':''))});window.addEventListener('unhandledrejection',function(e){s('Promise: '+((e.reason&&e.reason.message)||e.reason))});var ce=console.error;console.error=function(){s([].slice.call(arguments).join(' '));ce.apply(console,arguments)}})();<\/script>";
+
+
+/* ----- Antworten des Modells in Dateien zerlegen ----- */
+function cfParseDateien(txt) {
+  const out = {};
+  const re = /^={3,}\s*FILE:\s*(\S+?)\s*={3,}\s*$/gm;
+  const marks = []; let m;
+  while ((m = re.exec(txt))) marks.push({ name: m[1], start: m.index, ende: m.index + m[0].length });
+  marks.forEach((mk, i) => {
+    let inh = txt.slice(mk.ende, i + 1 < marks.length ? marks[i + 1].start : txt.length).replace(/^\s*\n/, "");
+    const zaun = inh.match(/^\s*```[a-zA-Z]*\n([\s\S]*?)\n```\s*$/);
+    if (zaun) inh = zaun[1];
+    else inh = inh.replace(/^\s*```[a-zA-Z]*\n/, "").replace(/\n```\s*$/, "");
+    out[mk.name.replace(/^\.?\//, "")] = inh.trim() + "\n";
+  });
+  return out;
+}
+const cfJsFehler = (src, modul) => {
+  try { modul ? new Function("module", "exports", src) : new Function(src); return ""; }
+  catch (e) { return e.message; }
+};
+// Pruefungen vor dem Livegang: liefert Liste von Problemen
+function cfPruefe(p) {
+  const pr = [];
+  const h = p.files["public/index.html"] || "", js = p.files["public/app.js"] || "";
+  if (!/<html|<!doctype/i.test(h)) pr.push("index.html ist kein HTML");
+  if (!/<script[^>]+src=["']?app\.js/i.test(h)) pr.push("index.html bindet app.js nicht ein");
+  if (!/<script[^>]+src=["']?api\.js/i.test(h)) pr.push("index.html bindet api.js nicht ein (muss VOR app.js stehen)");
+  if (!/<script[^>]+src=["']?config\.js/i.test(h)) pr.push("index.html bindet config.js nicht ein (muss ganz vor api.js stehen)");
+  if (!/<link[^>]+style\.css/i.test(h)) pr.push("index.html bindet style.css nicht ein");
+  const fe = cfJsFehler(js); if (fe) pr.push("app.js hat einen Syntaxfehler: " + fe);
+  if (p.logic) { const le = cfJsFehler(p.logic, true); if (le) pr.push("logic.js hat einen Syntaxfehler: " + le); }
+  // jede Element-ID aus app.js muss es im HTML geben (oder dort erzeugt werden)
+  const ids = new Set(); let m; const re = /getElementById\(\s*["']([\w\-]+)["']\s*\)/g;
+  while ((m = re.exec(js))) ids.add(m[1]);
+  const fehlend = [...ids].filter((i) => h.indexOf('id="' + i + '"') < 0 && h.indexOf("id='" + i + "'") < 0 && js.indexOf('id="' + i + '"') < 0 && js.indexOf("id='" + i + "'") < 0 && js.indexOf("id=\\\"" + i + "\\\"") < 0 && js.indexOf(".id = \"" + i + "\"") < 0 && js.indexOf(".id='" + i + "'") < 0 && js.indexOf(".id = '" + i + "'") < 0 && js.indexOf(".id=\"" + i + "\"") < 0);
+  if (fehlend.length) pr.push("app.js nutzt Elemente, die es im HTML nicht gibt: " + fehlend.slice(0, 8).join(", "));
+  const entPl = new Set(((p.spec && p.spec.entities) || []).map((e) => e.plural));
+  const re2 = /API\.(?:list|get|create|update|remove)\(\s*["'`]([\w\-]+)["'`]/g; const falsch = new Set();
+  while ((m = re2.exec(js))) if (!entPl.has(m[1])) falsch.add(m[1]);
+  if (falsch.size) pr.push("app.js ruft Tabellen auf, die es nicht gibt: " + [...falsch].join(", ") + " (vorhanden: " + [...entPl].join(", ") + ")");
+  return pr;
+}
+
+const CF_PLAN_SYS = [
+  "Du bist Software-Architekt. Aus der Beschreibung entwirfst du eine ECHTE Full-Stack-App: Server mit Datenbank plus Oberflaeche.",
+  "Antworte NUR mit JSON, ohne Erklaerung:",
+  "{\"name\": Appname kurz, \"kurz\": ein Satz, \"farbe\": \"#rrggbb\" Akzentfarbe passend zum Thema, \"icon\": ein Emoji,",
+  " \"auth\": true wenn Nutzer sich anmelden und eigene Daten haben (Todo, Haushaltsbuch, Kundenverwaltung ...), false fuer oeffentliche Tools/Rechner/Seiten,",
+  " \"entities\": [{\"name\": \"aufgabe\", \"plural\": \"aufgaben\", \"owner\": true, \"publicRead\": false, \"fields\": [{\"name\": \"titel\", \"type\": \"text\", \"required\": true}]}],",
+  " \"routen\": [{\"methode\": \"GET\", \"pfad\": \"/api/stats\", \"zweck\": \"...\", \"antwort\": \"Form der JSON-Antwort\"}],",
+  " \"seiten\": [\"Ansicht 1: was sieht/kann der Nutzer\", \"...\"]}",
+  "Feldtypen: text, longtext, number, bool, date, select (mit \"options\": [...]), email, url.",
+  "Regeln: Feldnamen klein, ohne Leerzeichen und Umlaute. NIE die Felder id, created, updated, owner anlegen (automatisch). 0 bis 6 Tabellen.",
+  "owner=true: jeder Nutzer sieht nur seine eigenen Datensaetze (Admin alles). publicRead=true: alle duerfen lesen (z.B. Produktkatalog), schreiben nur Angemeldete.",
+  "\"routen\" NUR fuer Logik, die einfaches Anlegen/Lesen/Aendern/Loeschen nicht kann: Auswertungen, Summen, Statistiken, Aktionen ueber mehrere Tabellen. Sonst leeres Array.",
+  "Denk wie ein Produktdesigner: Was braucht der Nutzer WIRKLICH, damit die App im Alltag taugt? Nimm sinnvolle Felder, Status-Auswahlen, Datum, Notizen mit.",
+].join("\n");
+
+const CF_HTML_SYS = (plan) => [
+  "Du bist ein Spitzen-Frontend-Entwickler. Du schreibst die Oberflaeche (index.html + style.css) fuer diese App.",
+  "APP-PLAN (JSON):\n" + JSON.stringify(plan),
+  "",
+  CF_API_DOK,
+  "",
+  "STRENGE REGELN:",
+  "- Ausgabe NUR in diesem Format, nichts davor oder danach:",
+  "=== FILE: public/index.html ===",
+  "(Inhalt)",
+  "=== FILE: public/style.css ===",
+  "(Inhalt)",
+  "- index.html: <!doctype html>, lang=\"de\", viewport-Meta, <link rel=\"stylesheet\" href=\"style.css\">, am Ende des body GENAU diese Skripte in dieser Reihenfolge: <script src=\"config.js\"></script><script src=\"api.js\"></script><script src=\"app.js\"></script>",
+  "- Baue ALLE Ansichten des Plans als Container mit eindeutigen ids (z.B. <section id=\"ansicht-liste\">), dazu Formulare, Listen-Container, Suchfeld, Buttons, leere Zustaende, Lade- und Fehlerbereich" + (plan.auth ? ", Login-/Registrier-Ansicht, Abmelden-Knopf" : "") + ".",
+  "- Jedes Element, das app.js steuern muss, bekommt eine id. Schreibe KEINE Logik und kein <script> mit Code in die HTML-Datei.",
+  "- Keine Frameworks, kein Build. Erlaubt per CDN: nur kleine Bibliotheken, die du wirklich brauchst (z.B. Chart.js von cdnjs).",
+  "- Design: eigenstaendig und hochwertig, nicht wie ein Standard-Template. Mobil zuerst, funktioniert auch am Desktop. Akzentfarbe " + (plan.farbe || "#6366f1") + ". Systemschrift-Stack, klare Hierarchie, grosszuegige Abstaende, Hover/Fokus/Aktiv-Zustaende, weiche Uebergaenge, Dunkelmodus per prefers-color-scheme. Grosse Touch-Ziele (min. 44px).",
+  "- Alle Texte deutsch.",
+].join("\n");
+
+const CF_JS_SYS = (plan) => [
+  "Du bist ein Spitzen-Frontend-Entwickler. Du schreibst app.js: die komplette, FUNKTIONIERENDE Logik der Oberflaeche.",
+  "APP-PLAN (JSON):\n" + JSON.stringify(plan),
+  "",
+  CF_API_DOK,
+  "",
+  "STRENGE REGELN:",
+  "- Ausgabe NUR in diesem Format:",
+  "=== FILE: public/app.js ===",
+  "(Inhalt)",
+  "- Nutze AUSSCHLIESSLICH ids, die in der gegebenen index.html existieren (oder erzeuge Elemente selbst per document.createElement). Pruefe jede id.",
+  "- Rufe API.list/create/update/remove nur mit diesen Tabellen auf: " + ((plan.entities || []).map((e) => e.plural).join(", ") || "(keine)") + ". Eigene Routen nur ueber API.call.",
+  "- Alles muss WIRKLICH funktionieren: Daten beim Start laden, anlegen, bearbeiten, loeschen (mit eigener Bestaetigung in der Seite, kein confirm()/alert()/prompt()), suchen/filtern, sortieren wo sinnvoll, Formularfehler (Servermeldung) anzeigen, Ladezustand, leerer Zustand, Fehler-Toast.",
+  plan.auth ? "- Login-Ablauf: beim Start API.me(); ohne Nutzer Login/Registrieren zeigen, sonst die App. Event \"api-logout\" -> zurueck zum Login. Abmelden-Knopf." : "- Kein Login noetig.",
+  "- Alle vom Nutzer stammenden Texte beim Einfuegen in HTML escapen (textContent oder Escape-Funktion), nie ungeprueft per innerHTML.",
+  "- Kein localStorage/sessionStorage direkt benutzen. Kein eval. Kein alert/confirm/prompt.",
+  "- Schreibe kompakt (unter 450 Zeilen), sauber, ohne Platzhalter und ohne \"TODO\". Die Datei muss vollstaendig sein.",
+].join("\n");
+
+const CF_LOGIK_SYS = (plan) => [
+  "Du schreibst logic.js: eigene Server-Routen fuer diese App. Sie laufen in einer Sandbox (kein require, kein fetch, kein Dateizugriff).",
+  "APP-PLAN (JSON):\n" + JSON.stringify(plan),
+  "",
+  "FORMAT (Ausgabe NUR dies):",
+  "=== FILE: logic.js ===",
+  "module.exports = { routes: {",
+  "  \"GET /api/stats\": (ctx) => { const rows = ctx.db.list(\"aufgaben\"); return { gesamt: rows.length }; },",
+  "  \"POST /api/aufgaben/:id/erledigen\": (ctx) => ctx.db.update(\"aufgaben\", ctx.params.id, { fertig: true }),",
+  "} };",
+  "ctx hat: body (JSON der Anfrage), query (Objekt), params (Pfad-Parameter wie :id), user ({id,name,email,admin} oder null), db.",
+  "db: db.list(plural, filterObjekt?) -> Array; db.get(plural, id); db.insert(plural, objekt); db.update(plural, id, teilobjekt); db.remove(plural, id). Alles synchron.",
+  "Bei owner-Tabellen: db.list liefert ALLE Datensaetze — filtere selbst nach ctx.user.id (Feld owner), ausser ctx.user.admin.",
+  "Fehler: throw new Error(\"Deutsche Meldung\") — wird dem Nutzer angezeigt. Rueckgabe: ein Objekt (wird als JSON gesendet).",
+  "Implementiere GENAU diese Routen aus dem Plan (\"routen\"), mit exakt der dort beschriebenen Antwortform. Rechne korrekt (Rundung, leere Listen, Division durch 0).",
+].join("\n");
+
+
+const bgSlug = (s) => {
+  let t = String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ß/g, "ss").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+  if (t.length < 3) t = (t + "-app").replace(/^-/, "app");
+  return t;
+};
+function bgPublic(p) {
+  const f = Object.assign({}, p.files);
+  f["public/api.js"] = cfApiJs();
+  f["public/config.js"] = "/* config.js */\nwindow.NEMESIS_API_BASE = \"\";\n";
+  if (f["public/index.html"]) f["public/index.html"] = f["public/index.html"].replace(/<head[^>]*>/i, (m) => m + cfDebugSnippet);
+  return f;
+}
+async function bgReparieren(job, proj, probleme, extra) {
+  const sys = [
+    "Du bist ein Spitzen-Entwickler und reparierst eine Web-App. Gib die FEHLERHAFTEN Dateien VOLLSTAENDIG korrigiert zurueck, im Format:",
+    "=== FILE: public/app.js ===", "(kompletter Inhalt)", "=== FILE: public/index.html ===", "(kompletter Inhalt, nur falls geaendert)",
+    "Moegliche Dateien: public/index.html, public/style.css, public/app.js, logic.js. Keine Erklaerung. Aendere nichts, was nicht kaputt ist.",
+    "Die Datei public/api.js existiert schon und bietet window.API (list/get/create/update/remove/call" + (proj.spec.auth ? "/register/login/logout/me" : "") + ").",
+  ].join("\n");
+  const user = "PROBLEME:\n- " + probleme.join("\n- ") + (extra ? "\n\n" + extra : "") + "\n\nPLAN:\n" + JSON.stringify(proj.spec)
+    + "\n\n=== FILE: public/index.html ===\n" + proj.files["public/index.html"] + "\n=== FILE: public/app.js ===\n" + proj.files["public/app.js"]
+    + (proj.logic ? "\n=== FILE: logic.js ===\n" + proj.logic : "");
+  const neu = cfParseDateien(await bgLlm(job, sys, user, 8000, "code"));
+  const np = { ...proj, files: { ...proj.files }, logic: proj.logic };
+  Object.keys(neu).forEach((k) => { if (k === "logic.js") np.logic = neu[k]; else if (/^public\/[\w\-.]+\.(html|css|js)$/.test(k) && !/api\.js$|config\.js$/.test(k)) np.files[k] = neu[k]; });
+  return np;
+}
+async function bgApp(job) {
+  const P = job.payload; let proj;
+  const dirVon = (slug) => path.join(APPS_DIR, slug);
+  if (P.wunsch && !P.slug) {
+    bgS(job, "Plan: Tabellen, Felder, Ansichten");
+    const plan = wJson(await bgLlm(job, CF_PLAN_SYS, String(P.wunsch).slice(0, 3000), 3000, "denken"));
+    if (!plan || typeof plan !== "object") throw new Error("Plan nicht lesbar");
+    plan.name = String(plan.name || "Meine App").slice(0, 60);
+    plan.entities = Array.isArray(plan.entities) ? plan.entities : [];
+    plan.routen = Array.isArray(plan.routen) ? plan.routen.filter((r) => r && /^(GET|POST|PUT|DELETE)$/.test(r.methode) && /^\/api\/[\w\-\/:]+$/.test(r.pfad || "")) : [];
+    plan.auth = !!plan.auth;
+    if (!/^#[0-9a-f]{6}$/i.test(plan.farbe || "")) plan.farbe = "#6366f1";
+    bgOk(job);
+    let slug = bgSlug(plan.name), i = 2; const b = slug;
+    while (fs.existsSync(dirVon(slug)) || fs.existsSync(dirVon(slug) + ".neu")) slug = b.slice(0, 28) + "-" + i++;
+    proj = { slug, spec: plan, files: {}, logic: "", wunsch: P.wunsch };
+    job.titel = plan.name; job.slug = slug;
+    if (plan.routen.length) {
+      bgS(job, "Server-Logik (" + plan.routen.length + " eigene Routen)");
+      proj.logic = cfParseDateien(await bgLlm(job, CF_LOGIK_SYS(plan), "Schreibe logic.js.", 4000, "code"))["logic.js"] || "";
+      bgOk(job, !!proj.logic);
+    }
+    bgS(job, "Oberflaeche: Aufbau und Design");
+    const h = cfParseDateien(await bgLlm(job, CF_HTML_SYS(plan), "Schreibe index.html und style.css.", 8000, "code"));
+    if (!h["public/index.html"]) throw new Error("Das Modell hat keine index.html geliefert.");
+    proj.files["public/index.html"] = h["public/index.html"];
+    proj.files["public/style.css"] = h["public/style.css"] || "body{font-family:system-ui;margin:0}\n";
+    bgOk(job);
+    bgS(job, "Oberflaeche: Logik (app.js)");
+    const j = cfParseDateien(await bgLlm(job, CF_JS_SYS(plan), "index.html:\n" + proj.files["public/index.html"] + "\n\nstyle.css (Auszug):\n" + proj.files["public/style.css"].slice(0, 2500) + "\n\nSchreibe jetzt app.js.", 8000, "code"));
+    if (!j["public/app.js"]) throw new Error("Das Modell hat keine app.js geliefert.");
+    proj.files["public/app.js"] = j["public/app.js"];
+    bgOk(job);
+  } else {
+    const slug = String(P.slug || "");
+    if (!aSlugOk(slug)) throw new Error("App-Name ungueltig");
+    let alt = null; try { alt = JSON.parse(fs.readFileSync(path.join(dirVon(slug), "projekt.json"), "utf8")); } catch (e) {}
+    const q = alt || P.projekt; if (!q || !q.files || !q.spec) throw new Error("Projektdateien nicht gefunden");
+    proj = { slug, spec: q.spec, files: Object.assign({}, q.files), logic: q.logic || "", wunsch: q.wunsch || "" };
+    job.slug = slug;
+    if (P.aendern) {
+      bgS(job, "Agent baut die Aenderung ein");
+      const sys = [
+        "Du bist ein Spitzen-Entwickler. Du aenderst eine bestehende Full-Stack-App nach Wunsch. Gib NUR die geaenderten Dateien VOLLSTAENDIG zurueck im Format:",
+        "=== FILE: pfad ===", "(kompletter Inhalt)",
+        "Erlaubte Dateien: public/index.html, public/style.css, public/app.js, logic.js, app.spec.json (Tabellen/Felder/auth; nur als gueltiges JSON mit denselben Schluesseln wie vorher).",
+        "Neue Tabellen/Felder gehoeren in app.spec.json UND in die Oberflaeche. Neue eigene Server-Routen gehoeren in logic.js (module.exports = { routes: { \"GET /api/x\": (ctx) => ... } }; ctx = {body, query, params, user, db{list,get,insert,update,remove}}).",
+        "Die Datei public/api.js existiert und bietet window.API (nicht aendern):\n" + CF_API_DOK, "Keine Erklaerung, keine Platzhalter.",
+      ].join("\n");
+      const user = "AENDERUNGSWUNSCH:\n" + String(P.aendern).slice(0, 3000) + "\n\n=== FILE: app.spec.json ===\n" + JSON.stringify(proj.spec, null, 1)
+        + Object.keys(proj.files).map((k) => "\n=== FILE: " + k + " ===\n" + proj.files[k]).join("") + (proj.logic ? "\n=== FILE: logic.js ===\n" + proj.logic : "");
+      const neu = cfParseDateien(await bgLlm(job, sys, user, 8000, "code"));
+      Object.keys(neu).forEach((k) => {
+        if (k === "logic.js") proj.logic = neu[k];
+        else if (k === "app.spec.json") { try { const s = JSON.parse(neu[k]); if (s && Array.isArray(s.entities)) proj.spec = { ...proj.spec, ...s }; } catch (e) {} }
+        else if (/^public\/[\w\-.]+\.(html|css|js)$/.test(k) && !/api\.js$|config\.js$/.test(k)) proj.files[k] = neu[k];
+      });
+      bgOk(job);
+    } else if (Array.isArray(P.reparieren) && P.reparieren.length) {
+      bgS(job, "Agent repariert Fehler aus der laufenden App");
+      proj = await bgReparieren(job, proj, ["Beim Ausfuehren der App im Browser sind diese Fehler aufgetreten:"].concat(P.reparieren.map((x) => String(x).slice(0, 300)).slice(0, 5)));
+      bgOk(job);
+    } else throw new Error("Nichts zu tun");
+  }
+  for (let runde = 0; runde < 2; runde++) {
+    const probleme = cfPruefe(proj);
+    if (!probleme.length) break;
+    bgS(job, "Selbstpruefung: " + probleme.length + " Problem(e) - Agent repariert");
+    try { proj = await bgReparieren(job, proj, probleme); bgOk(job); } catch (e) { bgOk(job, false); break; }
+  }
+  bgS(job, "Auf dem Server starten und testen");
+  const r = await aDeploy({ slug: proj.slug, spec: proj.spec, files: bgPublic(proj), logic: proj.logic });
+  if (r.fehler) { bgOk(job, false); throw new Error(r.fehler + (r.bericht ? ": " + r.bericht.filter((x) => !x.ok).map((x) => x.text).join("; ") : "")); }
+  bgOk(job);
+  try { fs.writeFileSync(path.join(dirVon(proj.slug), "projekt.json"), JSON.stringify({ wunsch: proj.wunsch, spec: proj.spec, files: proj.files, logic: proj.logic })); } catch (e) {}
+  job.ergebnis = { slug: proj.slug, name: proj.spec.name, version: r.version, pfad: "/x/" + proj.slug + "/", bericht: r.bericht };
+}
+
+/* ----- Missionen: ein Agent arbeitet einen Auftrag in Schritten ab ----- */
+async function bgMission(job) {
+  const P = job.payload, ag = P.agent || {};
+  const sys = String(ag.prompt || "").slice(0, 12000) || "Du bist ein sorgfaeltiger Assistent.";
+  const m = job.mission = job.mission || { ziel: String(P.ziel || "").slice(0, 3000), deadline: Date.now() + Math.min(Math.max(+P.stunden || 2, 1), 12) * 3600000, steps: [], ergebnis: "" };
+  if (!m.steps.length) {
+    bgS(job, "Plane Vorgehen");
+    const p = wJson(await bgLlm(job, "Du planst eine laengere, eigenstaendige Arbeit fuer den Agenten \"" + (ag.name || "Agent") + "\". Zerlege den Auftrag in 3 bis 8 aufeinander aufbauende Arbeitsschritte, die am Ende ein fertiges Ergebnis liefern. Antworte NUR mit JSON: {\"steps\":[{\"title\":\"max 5 Woerter\",\"task\":\"konkrete Anweisung\"}]}",
+      "Auftrag: " + m.ziel + "\nZeitbudget: " + (P.stunden || 2) + " Stunden", 1500, "denken"));
+    m.steps = (Array.isArray(p.steps) ? p.steps : []).slice(0, 8).map((x) => ({ title: wKurz(x.title, 60) || "Schritt", task: wKurz(x.task, 800), status: "offen", out: "" })).filter((x) => x.task);
+    if (!m.steps.length) throw new Error("Plan war leer");
+    bgOk(job);
+  }
+  for (let i = 0; i < m.steps.length; i++) {
+    const st = m.steps[i]; if (st.status === "fertig") continue;
+    bgPruefeAbbruch(job);
+    if (Date.now() > m.deadline) throw new Error("Zeitbudget aufgebraucht, Schritte offen: " + (m.steps.length - i));
+    bgS(job, "Schritt " + (i + 1) + "/" + m.steps.length + ": " + st.title);
+    const carry = m.steps.filter((x) => x.out).slice(-2).map((x) => x.title + ": " + x.out).join("\n\n");
+    st.out = await bgLlm(job, sys, "Gesamtauftrag: " + m.ziel + "\n" + (carry ? "Bisher erarbeitet:\n" + carry.slice(0, 6000) + "\n\n" : "") + "Dein Schritt jetzt: " + st.task + "\n\nLiefere nur das Arbeitsergebnis.", 1800, "normal");
+    st.status = "fertig"; bgOk(job); bgSpeichern(true);
+  }
+  if (!m.ergebnis) {
+    bgS(job, "Fasse Ergebnis zusammen");
+    m.ergebnis = await bgLlm(job, "Fasse die Arbeit zu einem uebergabefertigen Ergebnis zusammen: kein Bericht ueber die Arbeit, sondern das Produkt selbst. Deutsch.",
+      "Auftrag: " + m.ziel + "\n\nArbeitsergebnisse:\n" + m.steps.map((x) => "## " + x.title + "\n" + x.out).join("\n\n").slice(0, 24000), 2500, "normal");
+    bgOk(job);
+  }
+  job.ergebnis = { text: m.ergebnis };
+}
+
+/* ----- Routen (privat, /bg/...) ----- */
+function bgSicht(j, voll) {
+  const o = { id: j.id, typ: j.typ, titel: j.titel, status: j.status, erstellt: j.erstellt, start: j.start, ende: j.ende, fortschritt: j.fortschritt, fehler: j.fehler, slug: j.slug || "", versuche: j.versuche || 0 };
+  if (j.typ === "app") o.ergebnis = j.ergebnis ? { slug: j.ergebnis.slug, name: j.ergebnis.name, version: j.ergebnis.version, pfad: j.ergebnis.pfad, bericht: j.ergebnis.bericht } : null;
+  if (j.typ === "mission") {
+    o.agent = (j.payload && j.payload.agent && j.payload.agent.name) || "";
+    o.schritte = j.mission ? j.mission.steps.map((x) => ({ title: x.title, status: x.status })) : [];
+    o.ergebnis = j.ergebnis && voll ? { text: j.ergebnis.text } : (j.ergebnis ? { text: "" } : null);
+  }
+  return o;
+}
+async function bgIntern(p, req, res, url, CORS) {
+  const POST = req.method === "POST", s = bgZustand();
+  if (p === "/bg/status" && !POST) {
+    const id = url.searchParams.get("id");
+    if (id) { const j = s.jobs.find((x) => x.id === id); if (!j) { json(res, 404, { error: "Nicht gefunden" }, CORS); return true; } json(res, 200, { ok: true, job: bgSicht(j, true) }, CORS); return true; }
+    json(res, 200, { ok: true, jobs: s.jobs.slice(-25).reverse().map((j) => bgSicht(j, false)) }, CORS); return true;
+  }
+  if (p === "/bg/projekt" && !POST) {
+    const slug = String(url.searchParams.get("slug") || "");
+    if (!aSlugOk(slug)) { json(res, 400, { error: "Name ungueltig" }, CORS); return true; }
+    try { json(res, 200, { ok: true, projekt: JSON.parse(fs.readFileSync(path.join(APPS_DIR, slug, "projekt.json"), "utf8")) }, CORS); }
+    catch (e) { json(res, 404, { error: "Kein Projekt gespeichert" }, CORS); }
+    return true;
+  }
+  let body = null;
+  if (POST) { try { body = JSON.parse(await lies(req, 2 * 1024 * 1024)); } catch (e) {} }
+  if (!body || typeof body !== "object") { json(res, 400, { error: "Ungueltige Anfrage" }, CORS); return true; }
+  if (p === "/bg/neu") {
+    try {
+      let j;
+      if (body.typ === "app") {
+        if (!body.slug && String(body.wunsch || "").trim().length < 8) { json(res, 400, { error: "Beschreib die App etwas genauer." }, CORS); return true; }
+        if (body.slug && !body.aendern && !(Array.isArray(body.reparieren) && body.reparieren.length)) { json(res, 400, { error: "Aenderung fehlt" }, CORS); return true; }
+        const proj = body.projekt && typeof body.projekt === "object" ? { spec: body.projekt.spec, files: body.projekt.files, logic: body.projekt.logic, wunsch: body.projekt.wunsch } : undefined;
+        j = bgNeu("app", { wunsch: String(body.wunsch || "").slice(0, 3000), slug: body.slug ? String(body.slug) : "", aendern: body.aendern ? String(body.aendern).slice(0, 3000) : "", reparieren: Array.isArray(body.reparieren) ? body.reparieren.slice(0, 5) : [], projekt: proj, basis: body.basis },
+          body.slug ? (body.aendern ? "Aenderung: " : "Reparatur: ") + body.slug : wKurz(body.wunsch, 60));
+      } else if (body.typ === "mission") {
+        const ag = body.agent || {};
+        if (!ag.prompt || String(body.ziel || "").trim().length < 8) { json(res, 400, { error: "Agent und Auftrag noetig" }, CORS); return true; }
+        j = bgNeu("mission", { agent: { id: String(ag.id || "").slice(0, 36), name: wKurz(ag.name, 40), prompt: String(ag.prompt).slice(0, 12000) }, ziel: String(body.ziel).slice(0, 3000), stunden: +body.stunden || 2, basis: body.basis }, wKurz(body.ziel, 70));
+      } else { json(res, 400, { error: "Unbekannter Typ" }, CORS); return true; }
+      json(res, 200, { ok: true, id: j.id }, CORS);
+    } catch (e) { json(res, 400, { error: e.message }, CORS); }
+    return true;
+  }
+  const j = s.jobs.find((x) => x.id === String(body.id || ""));
+  if (!j) { json(res, 404, { error: "Nicht gefunden" }, CORS); return true; }
+  if (p === "/bg/abbrechen") { if (j.status === "wartet") { j.status = "abgebrochen"; j.ende = Date.now(); } else if (j.status === "laeuft") j.abbruch = true; bgSpeichern(true); json(res, 200, { ok: true }, CORS); return true; }
+  if (p === "/bg/nochmal") {
+    if (j.status === "laeuft" || j.status === "wartet") { json(res, 400, { error: "Laeuft schon" }, CORS); return true; }
+    if (j.typ === "app" && !j.slug && !(j.payload && (j.payload.wunsch || j.payload.slug))) { json(res, 400, { error: "Kann nicht neu gestartet werden" }, CORS); return true; }
+    j.status = "wartet"; j.fehler = ""; j.abbruch = false; j.ende = 0; j.versuche = 0; if (j.typ === "app") j.fortschritt = []; bgSpeichern(true); bgAnstossen(); json(res, 200, { ok: true }, CORS); return true;
+  }
+  if (p === "/bg/loeschen") { if (j.status === "laeuft") { json(res, 400, { error: "Erst abbrechen" }, CORS); return true; } s.jobs = s.jobs.filter((x) => x !== j); bgSpeichern(true); json(res, 200, { ok: true }, CORS); return true; }
+  json(res, 404, { error: "Unbekannt" }, CORS); return true;
+}
+
 /* ---------- Anmelden: die neueste geladene Version uebernimmt ---------- */
-const KERN = { behandle, rotiere, aufgabe, update, weltUhr, tgSchritt, tgUhr, _intern: { ANBIETER, WAHL, HAND, listen, pause, tg: { wannParse: tgWannParse, naechste: tgNaechste, teile: tgTeile, privat: tgPrivat, hole: tgHole, htmlText: tgHtmlText, rechne: tgRechne }, betrieb: { bNeu, bLaden, bWerkzeug, bAgent, bSystem, bSpeichern, bListe }, welt: { wTag, wZulassen, wAnsicht, wEinstellungen, wLaden, wSpeichern, wFirmaBauen, wGesellschaft, wSprechen, wProduktTexte, wPaketHtml, wProdukt, wBez, WJ } } };
+const KERN = { behandle, rotiere, aufgabe, update, weltUhr, tgSchritt, tgUhr, _intern: { ANBIETER, WAHL, HAND, listen, pause, bg: { bgNeu, bgZustand, cfPruefe, cfParseDateien, cfApiJs }, tg: { wannParse: tgWannParse, naechste: tgNaechste, teile: tgTeile, privat: tgPrivat, hole: tgHole, htmlText: tgHtmlText, rechne: tgRechne }, betrieb: { bNeu, bLaden, bWerkzeug, bAgent, bSystem, bSpeichern, bListe }, welt: { wTag, wZulassen, wAnsicht, wEinstellungen, wLaden, wSpeichern, wFirmaBauen, wGesellschaft, wSprechen, wProduktTexte, wPaketHtml, wProdukt, wBez, WJ } } };
 global.__nxApp = global.__nxApp || {};
 global.__nxApp.kern = KERN;
 global.__nxApp.version = VERSION;
@@ -3010,6 +3467,7 @@ if (!TGG.uhr) {
   TGG.uhr = setInterval(() => { const k = global.__nxApp.kern; if (k && k.tgUhr) k.tgUhr().catch(() => {}); }, 20 * 1000);
   TGG.uhr.unref && TGG.uhr.unref();
 }
+try { bgZustand(); bgAnstossen(); } catch (e) { console.warn("[bg] start: " + e.message); }
 try { tgStarteAlle(); } catch (e) { console.warn("[telegram] start: " + e.message); }
 if (!global.__nxApp.wartung) {
   global.__nxApp.wartung = true;

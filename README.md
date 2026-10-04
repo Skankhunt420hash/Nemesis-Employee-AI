@@ -65,3 +65,11 @@ Daten liegen in `sync-data/_betrieb-<id>.json`. Seiten-Quellen: `app/betrieb-sei
 - Agenten (aus dem Lab uebertragen) antworten mit Werkzeugen: Notizen, Web lesen/suchen (SSRF-Schutz: keine internen Adressen, nur Port 80/443), rechnen, Erinnerungen, Jobs (Zeitplan, Zuerich-Zeit), Betriebe verwalten, Apps lesen, andere Agenten fragen.
 - Nach Web-Zugriff sind schreibende Werkzeuge im selben Auftrag gesperrt (Schutz vor Prompt-Injection). Tageslimit fuer KI-Aufrufe einstellbar.
 - Chat-Befehle: /agenten /agent /jobs /job /notizen /neu /stopp /status /code /entkoppeln, `@Name Frage`.
+
+## Hintergrund-Aufträge (Server arbeitet weiter, auch wenn die App zu ist)
+
+Code-Schmiede (Voll-Apps bauen, ändern, reparieren) und Dauer-Missionen laufen als Aufträge **auf dem Server** (`/bg/neu|status|abbrechen|nochmal|loeschen|projekt`, Zustand in `sync-data/_bg.json`).
+- Max. 2 gleichzeitig, weitere warten; nach Server-Neustart laufen offene Aufträge automatisch weiter.
+- Die App fragt nur den Stand ab (alle paar Sekunden) – App schließen oder Handy sperren stoppt nichts.
+- Bei Fertig/Fehler kommt eine Telegram-Nachricht (wenn Telegram-Zentrale verbunden ist).
+- Per Telegram startbar: `app_bauen`, `mission_starten`, `auftraege_liste`.

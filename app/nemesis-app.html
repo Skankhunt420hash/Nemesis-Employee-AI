@@ -5464,89 +5464,70 @@ function CodeForgeVoll({ agents, models }) {
 
   const merke = (np) => {
     setP(np);
-    const rest = liste.filter((x) => x.slug !== np.slug);
-    const neu = [np].concat(rest);
-    setListe(neu); cfSpeichereProjekte(neu);
+    setListe((prev) => { const alt = prev.find((x) => x.slug === np.slug); const neu = [alt && alt.gh && !np.gh ? { ...np, gh: alt.gh } : np].concat(prev.filter((x) => x.slug !== np.slug)); cfSpeichereProjekte(neu); return neu; });
   };
   const step = (t, ok) => setSchritte((s) => (ok === undefined ? s.concat({ t, ok: null }) : s.map((x, i) => (i === s.length - 1 ? { t: x.t, ok } : x))));
 
   const gibInfo = (t) => { setInfo(t); setTimeout(() => setInfo(""), 2500); };
 
-  // Prueft die Dateien; bei Problemen darf das Modell einmal selbst nachbessern
-  const reparieren = async (proj, probleme, extra) => {
-    const sys = [
-      "Du bist ein Spitzen-Entwickler und reparierst eine Web-App. Gib die FEHLERHAFTEN Dateien VOLLSTAENDIG korrigiert zurueck, im Format:",
-      "=== FILE: public/app.js ===", "(kompletter Inhalt)", "=== FILE: public/index.html ===", "(kompletter Inhalt, nur falls geaendert)",
-      "Moegliche Dateien: public/index.html, public/style.css, public/app.js, logic.js. Keine Erklaerung. Aendere nichts, was nicht kaputt ist.",
-      "Die Datei public/api.js existiert schon und bietet window.API (list/get/create/update/remove/call" + (proj.spec.auth ? "/register/login/logout/me" : "") + ").",
-    ].join("\n");
-    const user = "PROBLEME:\n- " + probleme.join("\n- ") + (extra ? "\n\n" + extra : "")
-      + "\n\nPLAN:\n" + JSON.stringify(proj.spec)
-      + "\n\n=== FILE: public/index.html ===\n" + proj.files["public/index.html"]
-      + "\n=== FILE: public/app.js ===\n" + proj.files["public/app.js"]
-      + (proj.logic ? "\n=== FILE: logic.js ===\n" + proj.logic : "");
-    const neu = cfParseDateien(await ask([{ role: "user", content: user }], sys, 8000));
-    const np = { ...proj, files: { ...proj.files }, logic: proj.logic };
-    Object.keys(neu).forEach((k) => { if (k === "logic.js") np.logic = neu[k]; else if (k.indexOf("public/") === 0 && /\.(html|css|js)$/.test(k) && !/api\.js$|config\.js$/.test(k)) np.files[k] = neu[k]; });
-    return np;
+  /* ----- Hintergrund-Auftraege: der Server baut weiter, auch wenn die App zu ist ----- */
+  const [jobId, setJobId] = useState(() => { try { return localStorage.getItem("nx:cf:job") || ""; } catch (e) { return ""; } });
+  const [laufende, setLaufende] = useState([]);
+  const [serverApps, setServerApps] = useState([]);
+  const setzeJob = (id) => { setJobId(id); try { if (id) localStorage.setItem("nx:cf:job", id); else localStorage.removeItem("nx:cf:job"); } catch (e) {} };
+  const projektLaden = async (slug) => {
+    const d = await wApi("/bg/projekt?slug=" + encodeURIComponent(slug)); const q = d.projekt;
+    return { slug, spec: q.spec, files: q.files, logic: q.logic || "", wunsch: q.wunsch || "", erstellt: Date.now() };
   };
+  useEffect(() => {
+    if (!jobId) return;
+    let weg = false;
+    const tick = async () => {
+      try {
+        const d = await wApi("/bg/status?id=" + encodeURIComponent(jobId));
+        if (weg) return;
+        const j = d.job;
+        setSchritte((j.fortschritt || []).map((x) => ({ t: x.t, ok: x.ok })));
+        if (j.status === "fertig") {
+          const np0 = await projektLaden(j.ergebnis.slug);
+          if (weg) return;
+          merke({ ...np0, deploy: { version: j.ergebnis.version, zeit: Date.now() } });
+          setBericht(j.ergebnis.bericht); setLaufFehler([]); setIframeKey((k) => k + 1); setTab("vorschau"); setzeJob("");
+        } else if (j.status === "fehler" || j.status === "abgebrochen") { setErr(j.status === "abgebrochen" ? "Abgebrochen." : j.fehler); setzeJob(""); }
+      } catch (e) { if (!weg && /nicht gefunden/i.test(e.message)) setzeJob(""); }
+    };
+    tick(); const t = setInterval(tick, 3000);
+    return () => { weg = true; clearInterval(t); };
+  }, [jobId]);
+  useEffect(() => {
+    if (jobId || p) return;
+    let weg = false;
+    const hol = async () => {
+      try {
+        const a = await wApi("/bg/status"); const b = await wApi("/apps/liste");
+        if (weg) return;
+        setLaufende((a.jobs || []).filter((x) => x.typ === "app" && (x.status === "laeuft" || x.status === "wartet")));
+        setServerApps((b.apps || []).filter((x) => !liste.some((l) => l.slug === x.slug)));
+      } catch (e) {}
+    };
+    hol(); const t = setInterval(hol, 5000);
+    return () => { weg = true; clearInterval(t); };
+  }, [jobId, p, liste.length]);
 
-  const bauen = async () => {
+  const jobStart = async (body) => {
+    setErr(""); setBericht(null); setLaufFehler([]); setSchritte([{ t: "Auftrag wird an den Server übergeben", ok: null }]);
+    try { const r = await wPost("/bg/neu", Object.assign({ typ: "app", basis: cfBase() }, body)); setzeJob(r.id); }
+    catch (e) {
+      setSchritte([]);
+      setErr(e.message === "KEIN_SERVER" ? "Kein Nemesis-Server verbunden (Zahnrad). Ohne Server kann die App nicht gebaut werden." : e.message === "ALT" ? "Der Server kennt Hintergrund-Aufträge noch nicht: im Zahnrad „Server aktualisieren“, 5 Minuten warten." : e.message);
+    }
+  };
+  const bauen = () => {
     if (wunsch.trim().length < 8) { setErr("Beschreib die App etwas genauer."); return; }
-    setBusy(true); setErr(""); setSchritte([]); setBericht(null); setLaufFehler([]); setP(null); setGhStatus(null); setGhLog([]);
-    try {
-      step("Plan: Tabellen, Felder, Ansichten");
-      const plan = toJSON(await ask([{ role: "user", content: wunsch }], CF_PLAN_SYS, 3000));
-      if (!plan || typeof plan !== "object") throw new Error("Plan nicht lesbar");
-      plan.name = String(plan.name || "Meine App").slice(0, 60);
-      plan.entities = Array.isArray(plan.entities) ? plan.entities : [];
-      plan.routen = Array.isArray(plan.routen) ? plan.routen.filter((r) => r && /^(GET|POST|PUT|DELETE)$/.test(r.methode) && /^\/api\/[\w\-\/:]+$/.test(r.pfad || "")) : [];
-      plan.auth = !!plan.auth;
-      if (!/^#[0-9a-f]{6}$/i.test(plan.farbe || "")) plan.farbe = "#6366f1";
-      step(null, true);
-      const slug0 = cfSlug(plan.name);
-      const belegt = new Set(liste.map((x) => x.slug));
-      let slug = slug0, i = 2; while (belegt.has(slug)) slug = slug0.slice(0, 28) + "-" + i++;
-      const proj = { slug, spec: plan, files: {}, logic: "", wunsch, erstellt: Date.now() };
-
-      let logik = "";
-      if (plan.routen.length) {
-        step("Server-Logik (" + plan.routen.length + " eigene Routen)");
-        const r = cfParseDateien(await ask([{ role: "user", content: "Schreibe logic.js." }], CF_LOGIK_SYS(plan), 4000));
-        logik = r["logic.js"] || "";
-        step(null, !!logik);
-      }
-      proj.logic = logik;
-
-      step("Oberflaeche: Aufbau und Design");
-      const h = cfParseDateien(await ask([{ role: "user", content: "Schreibe index.html und style.css." }], CF_HTML_SYS(plan), 8000));
-      if (!h["public/index.html"]) throw new Error("Das Modell hat keine index.html geliefert. Bitte nochmal versuchen.");
-      proj.files["public/index.html"] = h["public/index.html"];
-      proj.files["public/style.css"] = h["public/style.css"] || "body{font-family:system-ui;margin:0}\n";
-      step(null, true);
-
-      step("Oberflaeche: Logik (app.js)");
-      const j = cfParseDateien(await ask([{ role: "user", content: "index.html:\n" + proj.files["public/index.html"] + "\n\nstyle.css (Auszug):\n" + proj.files["public/style.css"].slice(0, 2500) + "\n\nSchreibe jetzt app.js." }], CF_JS_SYS(plan), 8000));
-      if (!j["public/app.js"]) throw new Error("Das Modell hat keine app.js geliefert. Bitte nochmal versuchen.");
-      proj.files["public/app.js"] = j["public/app.js"];
-      step(null, true);
-
-      let aktuell = proj;
-      for (let runde = 0; runde < 2; runde++) {
-        const probleme = cfPruefe(aktuell);
-        if (!probleme.length) break;
-        step("Selbstpruefung: " + probleme.length + " Problem(e) — Agent repariert");
-        try { aktuell = await reparieren(aktuell, probleme); step(null, true); } catch (e) { step(null, false); break; }
-      }
-      const rest = cfPruefe(aktuell);
-      if (rest.length) setInfo("Hinweis: " + rest[0]);
-
-      step("Auf deinem Server starten und testen");
-      aktuell = await deploy(aktuell);
-      setTab("vorschau");
-    } catch (e) { setErr(e.message || String(e)); }
-    setBusy(false);
+    setP(null); setGhStatus(null); setGhLog([]); jobStart({ wunsch });
   };
+  const abbrechen = async () => { try { await wPost("/bg/abbrechen", { id: jobId }); } catch (e) {} };
+  const holeVomServer = async (slug) => { try { const np = await projektLaden(slug); merke({ ...np, deploy: { version: 1, zeit: Date.now() } }); } catch (e) { setErr(e.message); } };
 
   const deploy = async (proj) => {
     const srv = window.nxServer();
@@ -5572,51 +5553,15 @@ function CodeForgeVoll({ agents, models }) {
     setBusy(false);
   };
 
-  const aendernLos = async () => {
+  const aendernLos = () => {
     if (!aendern.trim() || !p) return;
-    setBusy(true); setErr(""); setSchritte([{ t: "Agent baut die Aenderung ein", ok: null }]);
-    try {
-      const sys = [
-        "Du bist ein Spitzen-Entwickler. Du aenderst eine bestehende Full-Stack-App nach Wunsch. Gib NUR die geaenderten Dateien VOLLSTAENDIG zurueck im Format:",
-        "=== FILE: pfad ===", "(kompletter Inhalt)",
-        "Erlaubte Dateien: public/index.html, public/style.css, public/app.js, logic.js, app.spec.json (Tabellen/Felder/auth; nur als gueltiges JSON mit denselben Schluesseln wie vorher).",
-        "Neue Tabellen/Felder gehoeren in app.spec.json UND in die Oberflaeche. Neue eigene Server-Routen gehoeren in logic.js (module.exports = { routes: { \"GET /api/x\": (ctx) => ... } }; ctx = {body, query, params, user, db{list,get,insert,update,remove}}).",
-        "Die Datei public/api.js existiert und bietet window.API (nicht aendern):\n" + CF_API_DOK,
-        "Keine Erklaerung, keine Platzhalter.",
-      ].join("\n");
-      const user = "AENDERUNGSWUNSCH:\n" + aendern + "\n\n=== FILE: app.spec.json ===\n" + JSON.stringify(p.spec, null, 1)
-        + Object.keys(p.files).map((k) => "\n=== FILE: " + k + " ===\n" + p.files[k]).join("")
-        + (p.logic ? "\n=== FILE: logic.js ===\n" + p.logic : "");
-      const neu = cfParseDateien(await ask([{ role: "user", content: user }], sys, 8000));
-      let np = { ...p, files: { ...p.files }, spec: p.spec, logic: p.logic };
-      Object.keys(neu).forEach((k) => {
-        if (k === "logic.js") np.logic = neu[k];
-        else if (k === "app.spec.json") { try { const s = JSON.parse(neu[k]); if (s && Array.isArray(s.entities)) np.spec = { ...p.spec, ...s }; } catch (e) {} }
-        else if (/^public\/[\w\-.]+\.(html|css|js)$/.test(k) && !/api\.js$|config\.js$/.test(k)) np.files[k] = neu[k];
-      });
-      for (let runde = 0; runde < 2; runde++) {
-        const pr = cfPruefe(np);
-        if (!pr.length) break;
-        setSchritte((s) => s.concat({ t: "Selbstpruefung: Agent repariert", ok: null }));
-        try { np = await reparieren(np, pr); } catch (e) { break; }
-      }
-      setSchritte((s) => s.map((x) => ({ ...x, ok: true })).concat({ t: "Auf deinem Server aktualisieren", ok: null }));
-      await deploy(np);
-      setAendern("");
-    } catch (e) { setErr(e.message || String(e)); }
-    setBusy(false);
+    jobStart({ slug: p.slug, aendern, projekt: { spec: p.spec, files: p.files, logic: p.logic, wunsch: p.wunsch } });
+    setAendern("");
   };
 
-  const fehlerReparieren = async () => {
+  const fehlerReparieren = () => {
     if (!p || !laufFehler.length) return;
-    setBusy(true); setErr(""); setSchritte([{ t: "Agent repariert Fehler aus der laufenden App", ok: null }]);
-    try {
-      let np = await reparieren(p, ["Beim Ausfuehren der App im Browser sind diese Fehler aufgetreten:"].concat(laufFehler));
-      const pr = cfPruefe(np); if (pr.length) np = await reparieren(np, pr);
-      setSchritte((s) => s.map((x) => ({ ...x, ok: true })).concat({ t: "Auf deinem Server aktualisieren", ok: null }));
-      await deploy(np);
-    } catch (e) { setErr(e.message || String(e)); }
-    setBusy(false);
+    jobStart({ slug: p.slug, reparieren: laufFehler, projekt: { spec: p.spec, files: p.files, logic: p.logic, wunsch: p.wunsch } });
   };
 
   const url = p ? cfBase() + "/x/" + p.slug + "/" : "";
@@ -5661,10 +5606,10 @@ function CodeForgeVoll({ agents, models }) {
   };
 
   /* ---------------- Ansicht ---------------- */
-  if (!p || busy) return (
+  if (!p || busy || jobId) return (
     <>
       <div className="log">Beschreib deine App. Der Agent entwirft Tabellen und Ansichten, baut Server mit Datenbank{" "}{"(+ Login)"} und Oberfläche, stellt sie auf deinen Server und testet sie wirklich. Danach: Link, ZIP oder Android-App.</div>
-      {!p && !busy && (
+      {!p && !busy && !jobId && (
         <>
           <span className="lbl">Was soll die App können?</span>
           <textarea value={wunsch} style={{ minHeight: 140 }}
@@ -5673,14 +5618,42 @@ function CodeForgeVoll({ agents, models }) {
           <button className="btn tox" onClick={bauen}>App bauen</button>
         </>
       )}
+      {jobId && (
+        <div className="log done" style={{ marginTop: 12 }}>
+          ⏳ Der Server baut jetzt im Hintergrund. Du kannst die App schließen – wenn du zurückkommst, läuft es weiter bzw. ist fertig{" "}(Telegram meldet sich auch, falls verbunden).
+        </div>
+      )}
       {schritte.length > 0 && (
         <div style={{ marginTop: 12 }}>
           {schritte.map((s, i) => <div key={i} className={"log " + (s.ok === false ? "err" : s.ok ? "done" : "warn")}>{s.ok === null ? "… " : s.ok ? "✓ " : "✕ "}{s.t}</div>)}
+          {jobId && <button className="btn ghost sm" onClick={abbrechen}>Abbrechen</button>}
         </div>
       )}
       {err && <div className="log err" style={{ marginTop: 12 }}>{err}</div>}
       {bericht && <Probelauf bericht={bericht} />}
-      {!busy && !p && liste.length > 0 && (
+      {!busy && !p && !jobId && laufende.length > 0 && (
+        <>
+          <span className="lbl">Läuft gerade auf dem Server</span>
+          {laufende.map((x) => (
+            <div key={x.id} className="card"><div className="row">
+              <div style={{ flex: 1 }}><div className="nm" style={{ fontSize: 15 }}>⏳ {x.titel}</div><div className="mt">{(x.fortschritt[x.fortschritt.length - 1] || {}).t || "wartet"}</div></div>
+              <button className="btn sm" onClick={() => setzeJob(x.id)}>Ansehen</button>
+            </div></div>
+          ))}
+        </>
+      )}
+      {!busy && !p && !jobId && serverApps.length > 0 && (
+        <>
+          <span className="lbl">Auf dem Server (noch nicht hier)</span>
+          {serverApps.map((x) => (
+            <div key={x.slug} className="card"><div className="row">
+              <div style={{ flex: 1 }}><div className="nm" style={{ fontSize: 15 }}>{x.name}</div><div className="mt">/x/{x.slug}/ · Version {x.version}</div></div>
+              <button className="btn sm" onClick={() => holeVomServer(x.slug)}>Holen</button>
+            </div></div>
+          ))}
+        </>
+      )}
+      {!busy && !p && !jobId && liste.length > 0 && (
         <>
           <span className="lbl">Meine Apps</span>
           {liste.map((x) => (
@@ -6312,6 +6285,7 @@ const fmtRest = (m) => {
 
 function Missions({ agents, models, upd, droplet }) {
   const [a, setA] = useState(null);
+  const a0 = a;
   const [ziel, setZiel] = useState("");
   const [modus, setModus] = useState("sicher");
   const [stunden, setStunden] = useState(2);
@@ -6319,11 +6293,30 @@ function Missions({ agents, models, upd, droplet }) {
   const [dro, setDro] = useState(null);
   const [, setTick] = useState(0);
   const stop = useRef(false);
+  const [sjId, setSjId] = useState("");
+  const [sj, setSj] = useState(null);
+  const sKey = "nx:ms:" + (a0 ? a0.id : "");
 
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 20000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    if (!a0) { setSjId(""); setSj(null); return; }
+    let id = ""; try { id = localStorage.getItem(sKey) || ""; } catch (e) {}
+    setSjId(id); setSj(null);
+  }, [a0 && a0.id]);
+  useEffect(() => {
+    if (!sjId) return;
+    let weg = false;
+    const hol = async () => {
+      try { const r = await wApi("/bg/status?id=" + encodeURIComponent(sjId)); if (!weg) setSj(r.job); }
+      catch (e) { if (!weg && /Nicht gefunden/i.test(e.message)) { setSj(null); setSjId(""); try { localStorage.removeItem(sKey); } catch (x) {} } }
+    };
+    hol(); const t = setInterval(hol, 4000);
+    return () => { weg = true; clearInterval(t); };
+  }, [sjId]);
 
   if (!agents.length) return <div className="mty"><h3>Keine Mission ohne Agent</h3><p>Erst einen Agenten bauen.</p></div>;
   if (!a) return <PickAgent agents={agents} models={models} onPick={setA} label="Wer uebernimmt die Mission?" />;
@@ -6368,33 +6361,20 @@ Je groesser das Zeitbudget, desto gruendlicher die Schritte. Zwischen drei und a
     setBusy(false);
   };
 
-  const aufDroplet = async () => {
-    const payload = { agentId: live.id, ziel, modus: modus === "voll" ? "voll" : "sicher", stunden };
-    const base = (droplet?.url || "").replace(/\/$/, "");
-    const cmd = "curl -X POST " + (base || "https://deine-domain") + "/api/missions \\\n" +
-      '  -H "Content-Type: application/json" \\\n' +
-      '  -H "X-Admin-Token: ' + (droplet?.token || "DEIN_TOKEN") + '" \\\n' +
-      "  -d '" + JSON.stringify(payload) + "'";
-
-    if (!base) {
-      setDro({ cmd, note: "Noch keine Serveradresse hinterlegt — im Labor unter Droplet eintragen. Solange geht es ueber die Konsole." });
-      return;
-    }
-    setBusy(true);
+  const aufServer = async () => {
+    setBusy(true); setDro(null);
     try {
-      const r = await fetch(base + "/api/missions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Admin-Token": droplet.token || "" },
-        body: JSON.stringify(payload),
-      });
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
-      setDro({ ok: true, id: d.id, view: base + (d.ansicht || "/m/" + d.id) });
+      const r = await wPost("/bg/neu", { typ: "mission", agent: { id: live.id, name: live.name, prompt: compilePrompt(live) }, ziel, stunden });
+      try { localStorage.setItem(sKey, r.id); } catch (e) {}
+      setSj(null); setSjId(r.id);
     } catch (e) {
-      setDro({ cmd, note: "Direktstart nicht moeglich (" + e.message + "). Haeufigste Gruende: Vorschau blockt fremde Adressen, Agent noch nicht auf dem Server, oder falscher Token. Der Befehl macht dasselbe." });
+      setDro({ note: e.message === "KEIN_SERVER" ? "Kein Nemesis-Server verbunden (Zahnrad). Ohne Server geht nur „Hier starten“." : e.message === "ALT" ? "Der Server kennt Hintergrund-Aufträge noch nicht. Zahnrad → „Server aktualisieren“." : "Start auf dem Server nicht möglich: " + e.message });
     }
     setBusy(false);
   };
+  const sAbbrechen = async () => { try { await wPost("/bg/abbrechen", { id: sjId }); } catch (e) {} };
+  const sNochmal = async () => { try { await wPost("/bg/nochmal", { id: sjId }); } catch (e) {} };
+  const sWeg = () => { try { localStorage.removeItem(sKey); } catch (e) {} setSj(null); setSjId(""); };
 
   const runOne = async (mm, i) => {
     const st = mm.steps[i];
@@ -6492,6 +6472,22 @@ Antworte NUR mit JSON. {"ok": boolean, "hinweis": string (1 Satz, leer wenn alle
     <>
       <button className="back" onClick={() => { stop.current = true; setA(null); }}>← Anderer Agent</button>
 
+      {sj && (
+        <>
+          <span className="lbl">Mission auf dem Server</span>
+          <div className={"log " + (sj.status === "fertig" ? "done" : sj.status === "fehler" ? "err" : "warn")}>
+            {sj.status === "fertig" ? "Fertig." : sj.status === "fehler" ? "Fehler: " + (sj.fehler || "unbekannt") : sj.status === "abgebrochen" ? "Abgebrochen." : sj.status === "wartet" ? "Wartet auf einen freien Platz…" : "Arbeitet im Hintergrund. Du kannst die App schliessen."}
+            {(sj.schritte || []).length > 0 && "\n" + sj.schritte.map((x) => (x.status === "fertig" ? "✓ " : "· ") + x.title).join("\n")}
+            {(sj.fortschritt || []).length > 0 && sj.status !== "fertig" && "\n→ " + sj.fortschritt[sj.fortschritt.length - 1].t}
+          </div>
+          {sj.status === "fertig" && sj.ergebnis && <Deliverable text={sj.ergebnis.text || ""} filename={live.name + "-ergebnis.txt"} />}
+          <div style={{ height: 8 }} />
+          {(sj.status === "laeuft" || sj.status === "wartet") && <button className="btn tox" onClick={sAbbrechen}>Abbrechen</button>}
+          {sj.status === "fehler" && <button className="btn" onClick={sNochmal}>Nochmal versuchen</button>}
+          {(sj.status === "fertig" || sj.status === "fehler" || sj.status === "abgebrochen") && <button className="btn tox" onClick={sWeg} style={{ marginTop: 8 }}>Ausblenden</button>}
+          <div style={{ height: 16 }} />
+        </>
+      )}
       {!m || m.status === "fertig" ? (
         <>
           {m?.status === "fertig" && (
@@ -6524,22 +6520,12 @@ Antworte NUR mit JSON. {"ok": boolean, "hinweis": string (1 Satz, leer wenn alle
           </button>
 
           <div className="log warn">
-            Der Agent arbeitet, solange diese Ansicht offen ist. Schliesst du sie, pausiert die Mission und du setzt sie spaeter genau hier fort. Fuer echten Dauerbetrieb gehoert die Mission auf den Droplet.
+            „Im Hintergrund“ arbeitet der Agent auf deinem Server weiter, auch wenn du die App schliesst. Du bekommst eine Telegram-Nachricht, wenn er fertig ist. „Hier starten“ läuft nur, solange diese Ansicht offen ist.
           </div>
-          <button className="btn" onClick={plan} disabled={busy || !ziel.trim()}>{busy ? "plant…" : "Hier starten"}</button>
+          <button className="btn" onClick={aufServer} disabled={busy || !ziel.trim() || (sj && (sj.status === "laeuft" || sj.status === "wartet"))}>Im Hintergrund starten (Server)</button>
           <div style={{ height: 12 }} />
-          <button className="btn tox" onClick={aufDroplet} disabled={busy || !ziel.trim()}>Auf Droplet starten</button>
-          {dro?.ok && (
-            <div className="log done" style={{ marginTop: 12 }}>
-              Laeuft auf dem Server. Mission {dro.id}{"\n"}Ansicht: {dro.view}
-            </div>
-          )}
-          {dro?.cmd && (
-            <>
-              <div className="log warn" style={{ marginTop: 12 }}>{dro.note}</div>
-              <Deliverable text={dro.cmd} filename="mission-starten.sh" hint="Auf dem Droplet ausfuehren. Die Antwort enthaelt die Mission-ID." />
-            </>
-          )}
+          <button className="btn tox" onClick={plan} disabled={busy || !ziel.trim()}>{busy ? "plant…" : "Hier starten (App muss offen bleiben)"}</button>
+          {dro?.note && <div className="log warn" style={{ marginTop: 12 }}>{dro.note}</div>}
         </>
       ) : (
         <>
