@@ -4529,7 +4529,7 @@ function gPlus(n) { const d = new Date(); d.setDate(d.getDate() + n); return gIs
 function gDays(s) { return Math.round((new Date(s + "T00:00:00") - new Date(gIso(new Date()) + "T00:00:00")) / 86400000); }
 function gId() { return Math.random().toString(36).slice(2, 9); }
 function gLeer(name) {
-  return { id: gId(), profile: { name: name || "Neues Restaurant", concept: "", hours: "", seats: 40, tone: "Freundlich und direkt." }, stock: [], menu: [], res: [], staples: ["Olivenöl", "Salz", "Pfeffer", "Knoblauch"], log: [] };
+  return { id: gId(), profile: { name: name || "Neues Restaurant", concept: "", hours: "", seats: 40, tone: "Freundlich und direkt.", adresse: "", telefon: "", email: "", website: "", kueche: "", preisniveau: "" }, stock: [], menu: [], res: [], staples: ["Olivenöl", "Salz", "Pfeffer", "Knoblauch"], wissen: [], faq: [], quellen: [], log: [] };
 }
 function gBeispiel() {
   const s = (name, unit, qty, days, rest) => ({ id: gId(), name, unit, qty, exp: gPlus(days), rest: !!rest });
@@ -4586,9 +4586,17 @@ ${R.profile.concept || "(noch nicht ausgefüllt)"}
 ÖFFNUNGSZEITEN: ${R.profile.hours || "(unbekannt)"}
 SITZPLÄTZE: ${R.profile.seats}
 TON: ${R.profile.tone}
+KONTAKT: ${[R.profile.adresse, R.profile.telefon, R.profile.email, R.profile.website].filter(Boolean).join(" | ") || "(unbekannt)"}
+KÜCHE / PREISNIVEAU: ${[R.profile.kueche, R.profile.preisniveau].filter(Boolean).join(" | ") || "(unbekannt)"}
 
 SPEISEKARTE:
 ${R.menu.map((d) => "- " + d.name + " (CHF " + Number(d.price).toFixed(2) + "): " + d.ings.map(ing).join(", ") + ". Allergene: " + (d.allergens || "unbekannt")).join("\n") || "(leer)"}
+
+WEITERES WISSEN ÜBER DAS HAUS:
+${(R.wissen || []).slice(0, 120).map((w) => "- [" + w.kat + "] " + w.text).join("\n").slice(0, 7000) || "(nichts hinterlegt)"}
+
+HÄUFIGE GÄSTEFRAGEN MIT ANTWORT DES HAUSES:
+${(R.faq || []).slice(0, 40).map((q) => "F: " + q.q + "\nA: " + q.a).join("\n").slice(0, 5000) || "(keine)"}
 
 GRUNDZUTATEN, immer vorhanden: ${R.staples.join(", ")}
 
@@ -4604,6 +4612,7 @@ ${rk}
 REGELN:
 - Antworte kurz, auf Deutsch (Schweizer Rechtschreibung, kein ß), im Ton des Hauses.
 - Nutze nur die Daten oben. Erfinde keine Bestände, Preise, Allergene oder Zeiten. Fehlt etwas, sag es und frage nach.
+- Mengen mit "geschätzt" bei Gerichten sind Schätzwerte aus der Analyse, sag das bei Portionszahlen dazu.
 - Bei Fragen nach Resten: stütze dich auf die berechnete Empfehlung, nenne Gericht, welche Ware sie verbraucht und wie viele Portionen sinnvoll sind.
 - Reservierungen und Bestandsänderungen löst du nur über "aktionen" aus, und erst wenn Name, Personenzahl, Datum (JJJJ-MM-TT) und Uhrzeit (HH:MM) klar sind. Sonst frag nach.
 - Allergene nennst du bei Gerichten immer mit.
@@ -4613,6 +4622,125 @@ ANTWORTFORMAT: Antworte NUR mit JSON, ohne Text davor oder danach:
 "aktionen" ist ein leeres Array, wenn nichts auszuführen ist.`;
 }
 
+
+/* ---- Wissens-Feld: Text/Webseite analysieren und in den Agenten einsortieren ---- */
+const G_PFADE = ["", "/speisekarte", "/karte", "/menu", "/menue", "/essen", "/kontakt", "/contact", "/ueber-uns", "/about", "/reservation", "/reservieren", "/oeffnungszeiten", "/team", "/events", "/impressum"];
+function gNorm(t) { return String(t || "").toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/[^a-z0-9]+/g, " ").trim(); }
+function gStr(v, max) { return v == null ? "" : String(v).replace(/\s+/g, " ").trim().slice(0, max || 400); }
+function gHtmlText(h) {
+  try { const d = new DOMParser().parseFromString(h, "text/html"); d.querySelectorAll("script,style,noscript").forEach((n) => n.remove()); return (d.body ? d.body.textContent : h).replace(/\s+/g, " ").trim(); } catch (e) { return String(h).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(); }
+}
+function gChunks(text, max) {
+  const out = []; let t = String(text || "").trim();
+  while (t.length > max) { let cut = t.lastIndexOf("\n", max); if (cut < max * 0.5) cut = t.lastIndexOf(". ", max); if (cut < max * 0.5) cut = max; out.push(t.slice(0, cut)); t = t.slice(cut).trim(); }
+  if (t) out.push(t);
+  return out;
+}
+async function gSeitenLesen(urlRoh, prog) {
+  const cloud = window.nxServer();
+  if (!cloud) throw new Error("Für Webseiten muss dein Server verbunden sein (App über deinen Server-Link öffnen). Alternativ den Text der Seite einfügen.");
+  let u = String(urlRoh).trim(); if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+  let origin; try { origin = new URL(u).origin; } catch (e) { throw new Error("Die Adresse sieht nicht richtig aus."); }
+  const ziele = [u].concat(G_PFADE.filter((x) => x).map((x) => origin + x)).filter((x, i, a) => a.indexOf(x) === i);
+  prog("Lese " + ziele.length + " Seiten …");
+  const res = await Promise.all(ziele.map(async (z) => {
+    try { const r = await fetch(cloud + "/fetch?url=" + encodeURIComponent(z)); if (!r.ok) return null; const d = await r.json(); return d && d.text ? { url: z, text: d.text } : null; } catch (e) { return null; }
+  }));
+  const seen = [], out = [];
+  res.forEach((x) => {
+    if (!x || x.text.length < 200) return;
+    const head = x.text.slice(0, 200).toLowerCase();
+    if (/404|nicht gefunden|not found|seite existiert nicht/.test(head)) return;
+    const key = x.text.slice(0, 300);
+    if (seen.indexOf(key) >= 0) return; seen.push(key); out.push(x);
+  });
+  if (!out.length) throw new Error("Auf der Seite war kaum Text zu finden (oft bei Seiten, die alles per JavaScript laden). Kopier den Text der Seite von Hand ins Feld.");
+  return out;
+}
+const G_PROMPT = `Du liest Material über EIN Restaurant (Webseite, Speisekarte, Notizen, E-Mails) und trägst alles Verwertbare in ein festes Schema ein. Antworte NUR mit JSON, ohne Text davor oder danach.
+{"name": string|null, "adresse": string|null, "telefon": string|null, "email": string|null, "website": string|null, "kueche": string|null, "preisniveau": string|null,
+ "konzept": string|null, "oeffnungszeiten": string|null, "sitzplaetze": number|null, "ton": string|null,
+ "gerichte": [{"name": string, "kategorie": string, "preis": number|null, "beschreibung": string, "allergene": string, "zutaten": [{"name": string, "menge": number, "einheit": "g"|"ml"|"Stk"}]}],
+ "fakten": [{"kategorie": "Team"|"Lieferanten"|"Events"|"Regeln"|"Geschichte"|"Besonderes"|"Preise"|"Sonstiges", "text": string}],
+ "faq": [{"frage": string, "antwort": string}]}
+REGELN:
+- Nur was im Material steht. Nichts erfinden. Was fehlt, ist null, "" oder [].
+- "konzept": 2 bis 5 Sätze in deinen Worten, nur aus dem Material (Küche, Stil, Philosophie, Atmosphäre).
+- "oeffnungszeiten": als lesbarer Text, wie im Material.
+- Gerichte: Preis als Zahl in CHF. Allergene nur, wenn im Material genannt oder bei der Zutat offensichtlich (Gluten bei Pasta, Milch bei Rahm), sonst "".
+- Zutaten: Nur hauptsächliche, aus Beschreibung oder Name ableitbare. Menge = realistische Schätzung pro Portion in g, ml oder Stk (Eier). Nie eine Zutat dazuerfinden, die nicht plausibel ist.
+- "fakten": einzelne, in sich verständliche Sätze (Lieferanten, Team, Events, Reservierungs- und Stornoregeln, Gruppengrössen, Gutscheine, Besonderheiten). Kein Duplikat von Konzept oder Öffnungszeiten.
+- "faq": nur Fragen, die Gäste real stellen würden und die das Material beantwortet.
+- Höchstens 60 Gerichte, 40 Fakten, 20 FAQ-Einträge.`;
+async function gAnalysiere(text, prog, quelle) {
+  const teile = gChunks(text, 9000).slice(0, 6);
+  const alle = [];
+  for (let i = 0; i < teile.length; i++) {
+    prog("Analysiere Teil " + (i + 1) + " von " + teile.length + " …");
+    let j = null, fehler = null;
+    for (let versuch = 0; versuch < 2 && !j; versuch++) {
+      try { j = toJSON(await ask([{ role: "user", content: (quelle ? "Quelle: " + quelle + "\n\n" : "") + teile[i] }], G_PROMPT, 3500)); } catch (e) { fehler = e; }
+    }
+    if (j) alle.push(j); else if (!alle.length && i === teile.length - 1) throw fehler || new Error("Analyse fehlgeschlagen.");
+  }
+  if (!alle.length) throw new Error("Analyse fehlgeschlagen. Bitte nochmal versuchen.");
+  const m = { name: null, adresse: null, telefon: null, email: null, website: null, kueche: null, preisniveau: null, konzept: null, oeffnungszeiten: null, sitzplaetze: null, ton: null, gerichte: [], fakten: [], faq: [] };
+  alle.forEach((j) => {
+    ["name", "adresse", "telefon", "email", "website", "kueche", "preisniveau", "konzept", "oeffnungszeiten", "ton"].forEach((k) => { const v = gStr(j[k], k === "konzept" ? 900 : 300); if (v && !m[k]) m[k] = v; });
+    const sp = Math.round(Number(j.sitzplaetze)); if (sp > 0 && sp < 2000 && !m.sitzplaetze) m.sitzplaetze = sp;
+    (Array.isArray(j.gerichte) ? j.gerichte : []).forEach((x) => { if (x && gStr(x.name)) m.gerichte.push(x); });
+    (Array.isArray(j.fakten) ? j.fakten : []).forEach((x) => { if (x && gStr(x.text)) m.fakten.push(x); });
+    (Array.isArray(j.faq) ? j.faq : []).forEach((x) => { if (x && gStr(x.frage) && gStr(x.antwort)) m.faq.push(x); });
+  });
+  return m;
+}
+function gUnit(e, m) {
+  e = String(e || "").toLowerCase(); m = Number(m);
+  if (!(m > 0)) return null;
+  if (e === "kg") return { u: "g", m: m * 1000 }; if (e === "l") return { u: "ml", m: m * 1000 }; if (e === "dl") return { u: "ml", m: m * 100 }; if (e === "cl") return { u: "ml", m: m * 10 };
+  if (e === "g" || e === "ml") return { u: e, m }; if (e === "stk" || e === "stück" || e === "stueck" || e === "st") return { u: "Stk", m };
+  return null;
+}
+function gFindStock(R, name) {
+  const n = gNorm(name); if (!n) return null;
+  return R.stock.find((x) => gNorm(x.name) === n) || R.stock.find((x) => { const a = gNorm(x.name); return a.length > 3 && (a.indexOf(n) >= 0 || n.indexOf(a) >= 0); }) || null;
+}
+function gMerge(R, d, ueberschreiben) {
+  const x = { ...R, profile: { ...R.profile }, stock: R.stock.map((s) => ({ ...s })), menu: R.menu.slice(), wissen: (R.wissen || []).slice(), faq: (R.faq || []).slice(), quellen: (R.quellen || []).slice() };
+  const st = { felder: 0, gerichte: 0, zutatenNeu: 0, fakten: 0, faq: 0 };
+  const setz = (k, v) => { if (v && (ueberschreiben || !x.profile[k])) { if (x.profile[k] !== v) st.felder++; x.profile[k] = v; } };
+  setz("name", d.name && (x.profile.name === "Neues Restaurant" || ueberschreiben || !x.profile.name) ? d.name : null);
+  ["adresse", "telefon", "email", "website", "kueche", "preisniveau"].forEach((k) => setz(k, d[k]));
+  setz("concept", d.konzept); setz("hours", d.oeffnungszeiten); setz("tone", d.ton && x.profile.tone === "Freundlich und direkt." ? d.ton : (ueberschreiben ? d.ton : null));
+  if (d.sitzplaetze && (ueberschreiben || x.profile.seats === 40)) { if (x.profile.seats !== d.sitzplaetze) st.felder++; x.profile.seats = d.sitzplaetze; }
+  const have = x.menu.map((g) => gNorm(g.name));
+  d.gerichte.forEach((g) => {
+    const nm = gStr(g.name, 80); if (!nm || have.indexOf(gNorm(nm)) >= 0) return; have.push(gNorm(nm));
+    const ings = [];
+    (Array.isArray(g.zutaten) ? g.zutaten : []).slice(0, 14).forEach((z) => {
+      const zn = gStr(z && z.name, 60), u = gUnit(z && z.einheit, z && z.menge); if (!zn || !u) return;
+      let it = gFindStock(x, zn);
+      if (!it) { it = { id: gId(), name: zn, unit: u.u, qty: 0, exp: gPlus(3), rest: false, neu: true }; x.stock.push(it); st.zutatenNeu++; }
+      if (it.unit === u.u) ings.push({ item: it.id, qty: Math.round(u.m * 10) / 10 });
+    });
+    const preis = Number(String(g.preis).replace(",", "."));
+    x.menu.push({ id: gId(), name: nm, price: preis >= 0 ? preis : 0, ings, allergens: gStr(g.allergene, 120), kat: gStr(g.kategorie, 40), text: gStr(g.beschreibung, 240), geschaetzt: true });
+    st.gerichte++;
+  });
+  const fk = x.wissen.map((w) => gNorm(w.text));
+  d.fakten.forEach((f) => { const t = gStr(f.text, 400); if (!t || fk.indexOf(gNorm(t)) >= 0 || x.wissen.length >= 300) return; fk.push(gNorm(t)); x.wissen.push({ id: gId(), kat: gStr(f.kategorie, 30) || "Sonstiges", text: t }); st.fakten++; });
+  const fq = x.faq.map((q) => gNorm(q.q));
+  d.faq.forEach((q) => { const fr = gStr(q.frage, 200), an = gStr(q.antwort, 500); if (!fr || !an || fq.indexOf(gNorm(fr)) >= 0 || x.faq.length >= 100) return; fq.push(gNorm(fr)); x.faq.push({ id: gId(), q: fr, a: an }); st.faq++; });
+  return { R: x, st };
+}
+const G_BESTAND_PROMPT = `Du liest eine freie Notiz zum Lagerbestand eines Restaurants (diktiert oder eingetippt) und machst daraus eine Liste. Antworte NUR mit JSON.
+{"posten": [{"name": string, "menge": number, "einheit": "g"|"ml"|"Stk", "haltbar_tage": number|null, "rest": boolean}]}
+REGELN:
+- Mengen in g, ml oder Stk umrechnen (1 kg = 1000 g, 1 l = 1000 ml).
+- "rest": true, wenn es schon gekochte Reste sind (z.B. "Risotto vom Vortag").
+- "haltbar_tage": nur wenn im Text steht, wie lange es hält oder bis wann. Sonst null.
+- Nichts erfinden. Unklare Zeilen weglassen.`;
+
 function GastroAgent() {
   const [db, setDb] = useState(gLade);
   const [sub, setSub] = useState("agent");
@@ -4620,6 +4748,8 @@ function GastroAgent() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [hinweis, setHinweis] = useState("");
+  const [wk, setWk] = useState({ text: "", url: "", busy: false, prog: "", vorschau: null, quelle: "", ueber: false, err: "" });
+  const [bt, setBt] = useState({ text: "", busy: false, vorschau: null, err: "" });
   const [f, setF] = useState({ n: "", q: "", u: "g", d: "3", rest: false, rn: "", rp: "2", rd: gPlus(0), rt: "19:00", karte: "" });
   const end = useRef(null);
   const R = db.list.find((x) => x.id === db.cur) || db.list[0];
@@ -4661,6 +4791,60 @@ function GastroAgent() {
       setChat([...next, { role: "assistant", content: antwort + (fehler.length ? "\n\n⚠ Nicht ausgeführt: " + fehler.join(" ") : "") }]);
     } catch (e) { setChat([...next, { role: "assistant", content: "⚠ " + e.message }]); }
     setBusy(false);
+  };
+
+
+  const wkProg = (t) => setWk((w) => ({ ...w, prog: t }));
+  const wissenAnalysieren = async () => {
+    let text = wk.text.trim(), url = wk.url.trim();
+    if (!url && /^https?:\/\/\S+$/i.test(text)) { url = text; text = ""; }
+    if (!url && text.length < 30) { setWk({ ...wk, err: "Füge Text ein, gib eine Webseite an oder lade eine Datei hoch." }); return; }
+    setWk({ ...wk, busy: true, err: "", vorschau: null, prog: "Starte …" });
+    try {
+      let material = text, quelle = "Eingefügter Text";
+      if (url) {
+        const seiten = await gSeitenLesen(url, wkProg);
+        material = seiten.map((x) => "### Seite: " + x.url + "\n" + x.text).join("\n\n") + (text ? "\n\n### Zusätzliche Notizen\n" + text : "");
+        quelle = url;
+      }
+      const d = await gAnalysiere(material, wkProg, quelle);
+      setWk((w) => ({ ...w, busy: false, prog: "", vorschau: d, quelle }));
+    } catch (e) { setWk((w) => ({ ...w, busy: false, prog: "", err: e.message })); }
+  };
+  const wissenUebernehmen = () => {
+    const { R: neu, st } = gMerge(R, wk.vorschau, wk.ueber);
+    neu.quellen = [...(neu.quellen || []), { id: gId(), titel: wk.quelle, datum: gIso(new Date()), n: st.gerichte + st.fakten + st.faq + st.felder }];
+    const nd = { ...db, list: db.list.map((x) => (x.id === R.id ? neu : x)) }; speichern(nd);
+    setWk({ ...wk, vorschau: null, text: "", url: "" });
+    note("Übernommen: " + st.felder + " Felder, " + st.gerichte + " Gerichte, " + st.fakten + " Fakten, " + st.faq + " FAQ" + (st.zutatenNeu ? ", " + st.zutatenNeu + " neue Zutaten im Bestand (Menge 0, bitte ergänzen)" : "") + ".");
+  };
+  const datei = (e) => {
+    const fl = e.target.files && e.target.files[0]; if (!fl) return;
+    const r = new FileReader();
+    r.onload = () => { let t = String(r.result || ""); if (/\.html?$/i.test(fl.name)) t = gHtmlText(t); setWk((w) => ({ ...w, text: (w.text ? w.text + "\n\n" : "") + t.slice(0, 60000) })); };
+    r.readAsText(fl); e.target.value = "";
+  };
+  const bestandAnalysieren = async () => {
+    if (bt.text.trim().length < 5) { setBt({ ...bt, err: "Schreib kurz, was da ist, z.B. „5 kg Tomaten, 2 kg Lachs, Risotto vom Vortag 1 kg“." }); return; }
+    setBt({ ...bt, busy: true, err: "", vorschau: null });
+    try {
+      const j = toJSON(await ask([{ role: "user", content: bt.text.slice(0, 8000) }], G_BESTAND_PROMPT, 1500));
+      const posten = (Array.isArray(j.posten) ? j.posten : []).map((x) => { const u = gUnit(x.einheit, x.menge); return u && gStr(x.name, 60) ? { name: gStr(x.name, 60), qty: u.m, unit: u.u, tage: Number(x.haltbar_tage) >= 0 && x.haltbar_tage != null ? Math.round(Number(x.haltbar_tage)) : null, rest: !!x.rest } : null; }).filter(Boolean).slice(0, 60);
+      if (!posten.length) throw new Error("Ich konnte keine Posten erkennen. Schreib Menge und Ware, z.B. „3 kg Zucchini“.");
+      setBt((b) => ({ ...b, busy: false, vorschau: posten }));
+    } catch (e) { setBt((b) => ({ ...b, busy: false, err: e.message })); }
+  };
+  const bestandUebernehmen = () => {
+    mut((x) => {
+      const stock = x.stock.map((q) => ({ ...q }));
+      bt.vorschau.forEach((po) => {
+        const it = gFindStock({ stock }, po.name);
+        if (it && it.unit === po.unit) { it.qty = (it.qty || 0) + po.qty; if (po.tage != null) it.exp = gPlus(po.tage); if (po.rest) it.rest = true; }
+        else stock.push({ id: gId(), name: po.name, unit: po.unit, qty: po.qty, exp: gPlus(po.tage != null ? po.tage : 3), rest: po.rest });
+      });
+      x.stock = stock; return x;
+    });
+    note(bt.vorschau.length + " Posten eingetragen."); setBt({ text: "", busy: false, vorschau: null, err: "" });
   };
 
   const tabs = [["agent", "Agent"], ["bestand", "Bestand"], ["karte", "Karte"], ["res", "Tische"], ["haus", "Haus"]];
@@ -4729,6 +4913,15 @@ function GastroAgent() {
             </div>
           );
         })}
+        <span className="lbl">Bestand einlesen</span>
+        <div className="log">Schreib oder diktiere frei, was da ist. Die KI sortiert es in den Bestand (neue Ware wird angelegt, vorhandene aufgefüllt).</div>
+        <textarea rows={3} placeholder="z.B. Heute geliefert: 5 kg Tomaten, 2 kg Lachs. Risotto vom Vortag 1 kg, muss heute weg." value={bt.text} onChange={(e) => setBt({ ...bt, text: e.target.value })} style={inp} />
+        <button className="btn tox" style={{ marginTop: 8 }} onClick={bestandAnalysieren} disabled={bt.busy}>{bt.busy ? "liest …" : "Analysieren"}</button>
+        {bt.err && <div className="log err" style={{ marginTop: 8 }}>{bt.err}</div>}
+        {bt.vorschau && (<div className="log done" style={{ marginTop: 8 }}>
+          {bt.vorschau.map((po, i) => <div key={i}>• {po.name}: {po.qty} {po.unit}{po.rest ? " (Rest)" : ""}{po.tage != null ? ", haltbar " + po.tage + " Tage" : ""}</div>)}
+          <div className="row" style={{ gap: 6, marginTop: 8 }}><button className="btn tox sm" style={bs} onClick={bestandUebernehmen}>Eintragen</button><button className="btn ghost sm" style={bs} onClick={() => setBt({ ...bt, vorschau: null })}>Verwerfen</button></div>
+        </div>)}
         <span className="lbl">Ware hinzufügen</span>
         <div className="card">
           <input placeholder="Name, z.B. Lachs" value={f.n} onChange={(e) => setF({ ...f, n: e.target.value })} style={inp} />
@@ -4754,7 +4947,7 @@ function GastroAgent() {
           <div key={d.id} className="card" style={{ marginTop: 6 }}>
             <div className="row" style={{ justifyContent: "space-between", gap: 8 }}><b>{d.name}</b><span>CHF {Number(d.price).toFixed(2)}</span></div>
             <div className="dsc" style={{ marginTop: 4 }}>{d.ings.map((g) => { const it = R.stock.find((x) => x.id === g.item); return (it ? it.name : "?") + " " + g.qty + (it ? it.unit : ""); }).join(" · ")}</div>
-            <div className="dsc">Allergene: {d.allergens || "keine angegeben"}</div>
+            <div className="dsc">Allergene: {d.allergens || "keine angegeben"}{d.geschaetzt ? " · Mengen geschätzt" : ""}{d.kat ? " · " + d.kat : ""}</div>
             <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={() => mut((x) => { x.menu = x.menu.filter((m) => m.id !== d.id); return x; })}>Entfernen</button>
           </div>
         ))}
@@ -4806,6 +4999,28 @@ function GastroAgent() {
       </>)}
 
       {sub === "haus" && (<>
+        <span className="lbl">Wissen einspeisen</span>
+        <div className="log">Alles, was du über das Restaurant weisst: Webseite-Adresse, Speisekarte, Notizen, E-Mails, Texte. Die KI liest es, sortiert es ein (Konzept, Zeiten, Karte, Regeln, Lieferanten, FAQ) und zeigt dir vorher, was sie übernimmt.</div>
+        <input placeholder="Webseite, z.B. www.restaurant-beispiel.ch" value={wk.url} onChange={(e) => setWk({ ...wk, url: e.target.value })} style={inp} />
+        <textarea rows={5} placeholder="…oder hier alles einfügen, was du über das Restaurant weisst" value={wk.text} onChange={(e) => setWk({ ...wk, text: e.target.value })} style={inp} />
+        <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+          <label className="btn ghost sm" style={{ width: "auto", cursor: "pointer", margin: 0 }}>Datei laden<input type="file" accept=".txt,.md,.csv,.json,.html,.htm" onChange={datei} style={{ display: "none" }} /></label>
+          <span className="dsc">Text, CSV, JSON oder HTML</span>
+        </div>
+        <button className="btn tox" style={{ marginTop: 8 }} onClick={wissenAnalysieren} disabled={wk.busy}>{wk.busy ? (wk.prog || "arbeitet …") : "Analysieren"}</button>
+        {wk.err && <div className="log err" style={{ marginTop: 8 }}>{wk.err}</div>}
+        {wk.vorschau && (() => { const d = wk.vorschau; const f = ["name", "adresse", "telefon", "email", "website", "kueche", "preisniveau", "oeffnungszeiten"].filter((k) => d[k]); return (
+          <div className="log done" style={{ marginTop: 8 }}>
+            <b>Gefunden:</b>{"\n"}
+            {f.map((k) => <div key={k}>• {k}: {d[k]}</div>)}
+            {d.konzept && <div>• Konzept: {d.konzept}</div>}
+            {d.sitzplaetze && <div>• Sitzplätze: {d.sitzplaetze}</div>}
+            <div>• {d.gerichte.length} Gerichte{d.gerichte.length ? " (z.B. " + d.gerichte.slice(0, 3).map((g) => g.name).join(", ") + ")" : ""}</div>
+            <div>• {d.fakten.length} Fakten, {d.faq.length} FAQ-Einträge</div>
+            <div className="dsc" style={{ marginTop: 6 }}>Zutatenmengen der Gerichte sind Schätzungen. Neue Zutaten kommen mit Menge 0 in den Bestand.</div>
+            <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}><input type="checkbox" checked={wk.ueber} onChange={(e) => setWk({ ...wk, ueber: e.target.checked })} style={{ width: "auto" }} /> Bestehende Angaben überschreiben</label>
+            <div className="row" style={{ gap: 6, marginTop: 8 }}><button className="btn tox sm" style={bs} onClick={wissenUebernehmen}>In den Agenten übernehmen</button><button className="btn ghost sm" style={bs} onClick={() => setWk({ ...wk, vorschau: null })}>Verwerfen</button></div>
+          </div>); })()}
         <span className="lbl">Konzept des Hauses</span>
         <div className="log">Hier steht, wer das Restaurant ist. Der Agent richtet jede Antwort danach aus.</div>
         <label className="dsc">Name</label><input value={R.profile.name} onChange={(e) => setP("name", e.target.value)} style={inp} />
@@ -4813,6 +5028,22 @@ function GastroAgent() {
         <label className="dsc">Öffnungszeiten</label><input value={R.profile.hours} onChange={(e) => setP("hours", e.target.value)} style={inp} />
         <label className="dsc">Sitzplätze</label><input inputMode="numeric" value={R.profile.seats} onChange={(e) => { const v = Math.round(Number(e.target.value)); if (v > 0) setP("seats", v); }} style={inp} />
         <label className="dsc">Ton gegenüber Gästen und Team</label><input value={R.profile.tone} onChange={(e) => setP("tone", e.target.value)} style={inp} />
+        <label className="dsc">Adresse</label><input value={R.profile.adresse || ""} onChange={(e) => setP("adresse", e.target.value)} style={inp} />
+        <label className="dsc">Telefon</label><input value={R.profile.telefon || ""} onChange={(e) => setP("telefon", e.target.value)} style={inp} />
+        <label className="dsc">E-Mail</label><input value={R.profile.email || ""} onChange={(e) => setP("email", e.target.value)} style={inp} />
+        <label className="dsc">Webseite</label><input value={R.profile.website || ""} onChange={(e) => setP("website", e.target.value)} style={inp} />
+        <label className="dsc">Küche</label><input value={R.profile.kueche || ""} onChange={(e) => setP("kueche", e.target.value)} style={inp} />
+        <label className="dsc">Preisniveau</label><input value={R.profile.preisniveau || ""} onChange={(e) => setP("preisniveau", e.target.value)} style={inp} />
+        <span className="lbl">Gespeichertes Wissen ({(R.wissen || []).length})</span>
+        {(R.wissen || []).length === 0 && <div className="log">Noch nichts. Oben Text oder eine Webseite einspeisen.</div>}
+        {(R.wissen || []).map((w) => (
+          <div key={w.id} className="card" style={{ marginTop: 6 }}><div className="row" style={{ justifyContent: "space-between", gap: 8 }}><div style={{ minWidth: 0 }}><div className="dsc">{w.kat}</div>{w.text}</div><button style={bs} className="btn ghost sm" onClick={() => mut((x) => { x.wissen = (x.wissen || []).filter((y) => y.id !== w.id); return x; })}>✕</button></div></div>
+        ))}
+        <span className="lbl">Häufige Gästefragen ({(R.faq || []).length})</span>
+        {(R.faq || []).map((q) => (
+          <div key={q.id} className="card" style={{ marginTop: 6 }}><div className="row" style={{ justifyContent: "space-between", gap: 8 }}><div style={{ minWidth: 0 }}><b>{q.q}</b><div className="dsc">{q.a}</div></div><button style={bs} className="btn ghost sm" onClick={() => mut((x) => { x.faq = (x.faq || []).filter((y) => y.id !== q.id); return x; })}>✕</button></div></div>
+        ))}
+        {(R.quellen || []).length > 0 && <div className="dsc" style={{ marginTop: 10 }}>Quellen: {(R.quellen || []).map((q) => q.titel + " (" + q.datum + ")").join(" · ")}</div>}
         <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => { const b = gBeispiel(); speichern({ list: [...db.list, b], cur: b.id }); setChat([]); }}>Beispiel-Restaurant dazuladen</button>
       </>)}
     </>
