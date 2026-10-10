@@ -2901,6 +2901,7 @@ Antworte NUR mit JSON.
 /* ---------------- WERKSTATT ---------------- */
 
 const TOOLS = [
+  { id: "gastro", n: "Gastro-Agent", d: "KI-Mitarbeiter für Restaurants: kennt Konzept, Karte, Bestand und Reservierungen, empfiehlt Gerichte aus Resten und nimmt Reservierungen an. Dein erstes Verkaufsprodukt.", ic: "❖" },
   { id: "breed", n: "Zuchtkammer", d: "Zwei Agenten zeugen ein Kind mit gemischtem Erbgut und eigener Generation.", ic: "⧗" },
   { id: "portal", n: "Portal-Fork", d: "Klont einen Agenten in eine Parallelversion mit anderer Ausrichtung.", ic: "◉" },
   { id: "meeseeks", n: "Einweg-Agent", d: "Existiert für genau eine Aufgabe, liefert, und ist danach weg.", ic: "◑" },
@@ -2945,7 +2946,7 @@ const TOOLS = [
 function Workshop(ctx) {
   const { tool, setTool } = ctx;
   if (tool) {
-    const T = { breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: KundenDossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, telegram: TelegramZentrale, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
+    const T = { gastro: GastroAgent, breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: KundenDossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, telegram: TelegramZentrale, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
     return (<><button className="back" onClick={() => setTool(null)}>← Werkbank</button><T {...ctx} /></>);
   }
   return (
@@ -4520,6 +4521,303 @@ function Onboarding({ agents, models }) {
   );
 }
 
+
+/* ---------------- GASTRO-AGENT (Restaurant-KI) ---------------- */
+const GASTRO_KEY = "nx-gastro-v1";
+function gIso(d) { const m = d.getMonth() + 1, t = d.getDate(); return d.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (t < 10 ? "0" : "") + t; }
+function gPlus(n) { const d = new Date(); d.setDate(d.getDate() + n); return gIso(d); }
+function gDays(s) { return Math.round((new Date(s + "T00:00:00") - new Date(gIso(new Date()) + "T00:00:00")) / 86400000); }
+function gId() { return Math.random().toString(36).slice(2, 9); }
+function gLeer(name) {
+  return { id: gId(), profile: { name: name || "Neues Restaurant", concept: "", hours: "", seats: 40, tone: "Freundlich und direkt." }, stock: [], menu: [], res: [], staples: ["Olivenöl", "Salz", "Pfeffer", "Knoblauch"], log: [] };
+}
+function gBeispiel() {
+  const s = (name, unit, qty, days, rest) => ({ id: gId(), name, unit, qty, exp: gPlus(days), rest: !!rest });
+  const stock = [s("Penne", "g", 5000, 300), s("Spaghetti", "g", 6000, 300), s("Eier", "Stk", 40, 12), s("Tomaten", "g", 3000, 2), s("Rahm", "ml", 2000, 1), s("Mozzarella", "g", 1500, 2), s("Basilikum", "g", 150, 1), s("Zucchini", "g", 4000, 2), s("Pouletbrust", "g", 3000, 3), s("Gorgonzola", "g", 800, 6), s("Blattspinat", "g", 1200, 1), s("Parmesan", "g", 1500, 30), s("Pancetta", "g", 1000, 5), s("Risotto vom Vortag", "g", 1800, 1, true)];
+  const by = (n) => stock.find((x) => x.name === n).id;
+  const g = (n, q) => ({ item: by(n), qty: q });
+  const r = gLeer("Trattoria Beispiel");
+  r.beispiel = true;
+  r.profile.concept = "Italienische Küche mit frischer Pasta und saisonalen Tagesgerichten. Zero Waste: Was übrig ist, wird am nächsten Tag zu einem eigenen Gericht. Preisniveau mittel, familiäre Atmosphäre, Stammgäste kennen wir beim Namen. Allergene nennen wir immer unaufgefordert.";
+  r.profile.hours = "Di bis So, 11:30 bis 14:00 und 17:30 bis 22:30. Montag Ruhetag.";
+  r.profile.tone = "Herzlich, direkt, per Du im Team, höflich per Sie mit Gästen.";
+  r.stock = stock;
+  r.menu = [
+    { id: gId(), name: "Penne Arrabbiata", price: 16.5, ings: [g("Penne", 120), g("Tomaten", 200), g("Basilikum", 5)], allergens: "Gluten" },
+    { id: gId(), name: "Spaghetti Carbonara", price: 21, ings: [g("Spaghetti", 120), g("Eier", 2), g("Parmesan", 30), g("Pancetta", 60)], allergens: "Gluten, Ei, Milch" },
+    { id: gId(), name: "Pasta Spinat-Gorgonzola", price: 19.5, ings: [g("Penne", 120), g("Blattspinat", 150), g("Gorgonzola", 60), g("Rahm", 60)], allergens: "Gluten, Milch" },
+    { id: gId(), name: "Pollo alla Panna", price: 28, ings: [g("Pouletbrust", 180), g("Rahm", 100), g("Zucchini", 120)], allergens: "Milch" },
+    { id: gId(), name: "Caprese", price: 15, ings: [g("Mozzarella", 125), g("Tomaten", 150), g("Basilikum", 5)], allergens: "Milch" },
+    { id: gId(), name: "Zucchini gratiniert", price: 18, ings: [g("Zucchini", 250), g("Mozzarella", 80), g("Parmesan", 20)], allergens: "Milch" },
+    { id: gId(), name: "Arancini (3 Stk)", price: 12.5, ings: [g("Risotto vom Vortag", 200), g("Mozzarella", 40), g("Eier", 1)], allergens: "Gluten, Ei, Milch" },
+    { id: gId(), name: "Spaghetti Pomodoro", price: 16, ings: [g("Spaghetti", 120), g("Tomaten", 250), g("Basilikum", 5)], allergens: "Gluten" },
+  ];
+  r.res = [{ id: gId(), name: "Familie Keller", n: 6, date: gPlus(0), time: "12:30" }, { id: gId(), name: "Frau Meier", n: 2, date: gPlus(0), time: "19:00" }, { id: gId(), name: "Herr Brunner", n: 4, date: gPlus(1), time: "20:00" }];
+  return r;
+}
+function gLade() {
+  try { const o = JSON.parse(localStorage.getItem(GASTRO_KEY) || "null"); if (o && Array.isArray(o.list) && o.list.length) return o; } catch (e) {}
+  const b = gBeispiel(); return { list: [b], cur: b.id };
+}
+function gUrg(it) { const d = gDays(it.exp); let u = d <= 0 ? 3 : d === 1 ? 2 : d <= 3 ? 1 : 0; if (it.rest) u = Math.max(u, 2); return u; }
+function gWann(it) { const d = gDays(it.exp); if (it.rest && d <= 1) return "Rest, heute verwenden"; if (d <= 0) return "heute"; if (d === 1) return "morgen"; return "in " + d + " Tagen"; }
+function gRank(R) {
+  const out = [];
+  R.menu.forEach((d) => {
+    let portions = Infinity, ok = d.ings.length > 0;
+    d.ings.forEach((g) => { const it = R.stock.find((x) => x.id === g.item); if (!it || it.qty <= 0 || !(g.qty > 0)) { ok = false; return; } portions = Math.min(portions, Math.floor(it.qty / g.qty)); });
+    if (!ok || portions < 1 || !isFinite(portions)) return;
+    const n = Math.min(portions, 8); let score = 0; const uses = [];
+    d.ings.forEach((g) => { const it = R.stock.find((x) => x.id === g.item), u = gUrg(it); if (u > 0) { score += u * Math.min(1, g.qty * n / it.qty); uses.push(it.name + " (" + gWann(it) + ")"); } });
+    if (score > 0) out.push({ dish: d, portions, score, uses });
+  });
+  return out.sort((a, b) => b.score - a.score);
+}
+function gSeats(R, date) { return R.res.filter((r) => r.date === date).reduce((s, r) => s + r.n, 0); }
+function gKontext(R) {
+  const ing = (g) => { const it = R.stock.find((x) => x.id === g.item); return (it ? it.name : "?") + " " + g.qty + (it ? it.unit : ""); };
+  const rk = gRank(R).slice(0, 5).map((x, i) => (i + 1) + ". " + x.dish.name + ": verbraucht " + x.uses.join(", ") + "; bis zu " + x.portions + " Portionen").join("\n") || "(keine Empfehlung)";
+  return `Du bist der Gastro-Agent von "${R.profile.name}" und arbeitest wie ein fester Mitarbeiter dieses Hauses. Du kennst Konzept, Karte, Bestand und Reservierungen und sprichst im Namen des Hauses.
+Heute ist ${gIso(new Date())}.
+
+KONZEPT DES HAUSES:
+${R.profile.concept || "(noch nicht ausgefüllt)"}
+
+ÖFFNUNGSZEITEN: ${R.profile.hours || "(unbekannt)"}
+SITZPLÄTZE: ${R.profile.seats}
+TON: ${R.profile.tone}
+
+SPEISEKARTE:
+${R.menu.map((d) => "- " + d.name + " (CHF " + Number(d.price).toFixed(2) + "): " + d.ings.map(ing).join(", ") + ". Allergene: " + (d.allergens || "unbekannt")).join("\n") || "(leer)"}
+
+GRUNDZUTATEN, immer vorhanden: ${R.staples.join(", ")}
+
+BESTAND (aktuell):
+${R.stock.map((i) => "- " + i.name + ": " + i.qty + " " + i.unit + ", haltbar bis " + i.exp + " (" + gWann(i) + ")" + (i.rest ? " [REST, schon gekocht]" : "")).join("\n") || "(leer)"}
+
+RESERVIERUNGEN:
+${R.res.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((r) => "- " + r.date + " " + r.time + ": " + r.name + ", " + r.n + " Pers.").join("\n") || "(keine)"}
+
+BERECHNETE RESTE-EMPFEHLUNG (nach Verbrauch bald ablaufender Ware):
+${rk}
+
+REGELN:
+- Antworte kurz, auf Deutsch (Schweizer Rechtschreibung, kein ß), im Ton des Hauses.
+- Nutze nur die Daten oben. Erfinde keine Bestände, Preise, Allergene oder Zeiten. Fehlt etwas, sag es und frage nach.
+- Bei Fragen nach Resten: stütze dich auf die berechnete Empfehlung, nenne Gericht, welche Ware sie verbraucht und wie viele Portionen sinnvoll sind.
+- Reservierungen und Bestandsänderungen löst du nur über "aktionen" aus, und erst wenn Name, Personenzahl, Datum (JJJJ-MM-TT) und Uhrzeit (HH:MM) klar sind. Sonst frag nach.
+- Allergene nennst du bei Gerichten immer mit.
+
+ANTWORTFORMAT: Antworte NUR mit JSON, ohne Text davor oder danach:
+{"antwort": string, "aktionen": [ {"typ":"reservierung","name":string,"personen":number,"datum":string,"uhrzeit":string} | {"typ":"bestand","ware":string,"aenderung":number} ]}
+"aktionen" ist ein leeres Array, wenn nichts auszuführen ist.`;
+}
+
+function GastroAgent() {
+  const [db, setDb] = useState(gLade);
+  const [sub, setSub] = useState("agent");
+  const [chat, setChat] = useState([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [hinweis, setHinweis] = useState("");
+  const [f, setF] = useState({ n: "", q: "", u: "g", d: "3", rest: false, rn: "", rp: "2", rd: gPlus(0), rt: "19:00", karte: "" });
+  const end = useRef(null);
+  const R = db.list.find((x) => x.id === db.cur) || db.list[0];
+  const speichern = (nd) => { setDb(nd); try { localStorage.setItem(GASTRO_KEY, JSON.stringify(nd)); } catch (e) {} };
+  const mut = (fn) => { const nd = { ...db, list: db.list.map((x) => (x.id === R.id ? fn({ ...x }) : x)) }; speichern(nd); };
+  const note = (t) => { setHinweis(t); setTimeout(() => setHinweis(""), 2600); };
+  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth" }); }, [chat.length, busy]);
+
+  const resAdd = (name, n, date, time) => {
+    n = Math.round(Number(n));
+    if (!name || !n || n < 1 || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) throw new Error("Name, Personen, Datum und Uhrzeit fehlen oder sind ungültig.");
+    if (date < gIso(new Date())) throw new Error("Das Datum liegt in der Vergangenheit.");
+    const frei = R.profile.seats - gSeats(R, date);
+    if (n > frei) throw new Error("Zu wenig Platz am " + date + ": nur noch " + Math.max(frei, 0) + " von " + R.profile.seats + " Plätzen frei.");
+    mut((x) => { x.res = [...x.res, { id: gId(), name: String(name).slice(0, 60), n, date, time }]; return x; });
+  };
+  const senden = async (text) => {
+    const t = String(text || input).trim();
+    if (!t || busy) return;
+    const next = [...chat, { role: "user", content: t }];
+    setChat(next); setInput(""); setBusy(true);
+    try {
+      const raw = await ask(next.slice(-10).map((m) => ({ role: m.role, content: m.content })), gKontext(R), 900);
+      let antwort = raw, aktionen = [];
+      try { const j = toJSON(raw); antwort = String(j.antwort || raw); aktionen = Array.isArray(j.aktionen) ? j.aktionen.slice(0, 5) : []; } catch (e) {}
+      const fehler = [];
+      let cur = R;
+      aktionen.forEach((a) => {
+        try {
+          if (a.typ === "reservierung") resAdd(String(a.name || "").trim(), a.personen, String(a.datum || ""), String(a.uhrzeit || ""));
+          else if (a.typ === "bestand") {
+            const nm = String(a.ware || "").toLowerCase();
+            const it = R.stock.find((x) => x.name.toLowerCase() === nm) || R.stock.find((x) => x.name.toLowerCase().indexOf(nm) >= 0);
+            if (!it) throw new Error("Ware nicht gefunden: " + a.ware);
+            mut((x) => { x.stock = x.stock.map((s) => (s.id === it.id ? { ...s, qty: Math.max(0, s.qty + Number(a.aenderung || 0)) } : s)); return x; });
+          }
+        } catch (e) { fehler.push(e.message); }
+      });
+      setChat([...next, { role: "assistant", content: antwort + (fehler.length ? "\n\n⚠ Nicht ausgeführt: " + fehler.join(" ") : "") }]);
+    } catch (e) { setChat([...next, { role: "assistant", content: "⚠ " + e.message }]); }
+    setBusy(false);
+  };
+
+  const tabs = [["agent", "Agent"], ["bestand", "Bestand"], ["karte", "Karte"], ["res", "Tische"], ["haus", "Haus"]];
+  const radar = gRank(R).slice(0, 4);
+  const stock = R.stock.slice().sort((a, b) => gDays(a.exp) - gDays(b.exp));
+  const setP = (k, v) => mut((x) => { x.profile = { ...x.profile, [k]: v }; return x; });
+  const inp = { width: "100%", marginTop: 4 };
+  const bs = { width: "auto", flex: "0 0 auto" };
+
+  return (
+    <>
+      <span className="lbl">Gastro-Agent</span>
+      <div className="log">Ein KI-Mitarbeiter, der ein Restaurant wirklich kennt: Konzept, Karte, Bestand, Reservierungen. Frag zum Beispiel „Von was haben wir Reste?“.</div>
+      <div className="row" style={{ gap: 6, flexWrap: "wrap", margin: "10px 0" }}>
+        <select value={R.id} onChange={(e) => speichern({ ...db, cur: e.target.value })} style={{ flex: 1, minWidth: 140 }}>
+          {db.list.map((x) => <option key={x.id} value={x.id}>{x.profile.name}{x.beispiel ? " (Beispiel)" : ""}</option>)}
+        </select>
+        <button style={bs} className="btn ghost sm" onClick={() => { const n = gLeer("Neues Restaurant"); speichern({ list: [...db.list, n], cur: n.id }); setChat([]); setSub("haus"); }}>+ Neu</button>
+        {db.list.length > 1 && <button style={bs} className="btn ghost sm" onClick={() => { const l = db.list.filter((x) => x.id !== R.id); speichern({ list: l, cur: l[0].id }); setChat([]); }}>Löschen</button>}
+      </div>
+      <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        {tabs.map(([k, n]) => <button key={k} style={bs} className={"btn sm " + (sub === k ? "cy" : "ghost")} onClick={() => setSub(k)}>{n}</button>)}
+      </div>
+      {hinweis && <div className="log done">{hinweis}</div>}
+
+      {sub === "agent" && (<>
+        <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+          {["Von was haben wir Reste?", "Was bieten wir heute als Tagesgericht an?", "Wer kommt heute zum Essen?", "Welche Gerichte sind ohne Gluten?"].map((q) => <button key={q} style={bs} className="btn ghost sm" onClick={() => senden(q)} disabled={busy}>{q}</button>)}
+        </div>
+        {chat.length === 0 && <div className="log">Hallo, ich bin der Agent von {R.profile.name}. Ich kenne Karte, Bestand und Reservierungen.</div>}
+        {chat.map((m, i) => (
+          <div key={i} className={"msg " + (m.role === "user" ? "u" : "a")}>
+            <div className="who">{m.role === "user" ? "Du" : "Agent"}</div>
+            <div className="bub" style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
+          </div>
+        ))}
+        {busy && <div className="msg a"><div className="who">Agent</div><div className="bub"><span className="dot live" style={{ marginRight: 7 }} />denkt nach</div></div>}
+        <div ref={end} />
+        <div className="cmp">
+          <input value={input} placeholder="Frag den Agenten …" onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && senden()} />
+          <button className="snd" onClick={() => senden()} disabled={busy}>➤</button>
+        </div>
+      </>)}
+
+      {sub === "bestand" && (<>
+        <span className="lbl">Reste-Radar</span>
+        {radar.length === 0 && <div className="log">Nichts läuft bald ab, oder die Zutaten der Karte fehlen im Bestand.</div>}
+        {radar.map((x, i) => (
+          <div key={x.dish.id} className="log done" style={{ marginTop: 6 }}><b>{i + 1}. {x.dish.name} · CHF {Number(x.dish.price).toFixed(2)}</b>{"\n"}Verbraucht: {x.uses.join(", ")}. Bis zu {x.portions} Portionen möglich.</div>
+        ))}
+        <span className="lbl">Bestand</span>
+        {stock.length === 0 && <div className="log">Noch leer. Unten Ware hinzufügen.</div>}
+        {stock.map((it) => {
+          const step = it.unit === "Stk" ? 1 : (it.qty >= 1000 ? 500 : 100);
+          const chg = (dlt) => mut((x) => { x.stock = x.stock.map((s) => (s.id === it.id ? { ...s, qty: Math.max(0, s.qty + dlt) } : s)); return x; });
+          return (
+            <div key={it.id} className="card" style={{ marginTop: 6 }}>
+              <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
+                <div style={{ minWidth: 0 }}><b>{it.name}</b><div className="dsc" style={{ color: gUrg(it) >= 2 ? "var(--mag)" : undefined }}>{gWann(it)}</div></div>
+                <div className="row" style={{ gap: 6 }}>
+                  <button style={bs} className="btn ghost sm" onClick={() => chg(-step)}>−</button>
+                  <span style={{ minWidth: 70, textAlign: "center" }}>{it.qty} {it.unit}</span>
+                  <button style={bs} className="btn ghost sm" onClick={() => chg(step)}>+</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        <span className="lbl">Ware hinzufügen</span>
+        <div className="card">
+          <input placeholder="Name, z.B. Lachs" value={f.n} onChange={(e) => setF({ ...f, n: e.target.value })} style={inp} />
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            <input placeholder="Menge" inputMode="decimal" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
+            <select value={f.u} onChange={(e) => setF({ ...f, u: e.target.value })}><option>g</option><option>ml</option><option>Stk</option></select>
+            <input placeholder="Haltbar (Tage)" inputMode="numeric" value={f.d} onChange={(e) => setF({ ...f, d: e.target.value })} />
+          </div>
+          <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}><input type="checkbox" checked={f.rest} onChange={(e) => setF({ ...f, rest: e.target.checked })} style={{ width: "auto" }} /> Das ist ein Rest (schon gekocht)</label>
+          <button className="btn tox" style={{ marginTop: 8 }} onClick={() => {
+            const q = Number(String(f.q).replace(",", ".")), d = Math.round(Number(f.d));
+            if (!f.n.trim() || !(q > 0) || !(d >= 0)) { note("Name, Menge und Haltbarkeit angeben."); return; }
+            mut((x) => { x.stock = [...x.stock, { id: gId(), name: f.n.trim().slice(0, 50), unit: f.u, qty: q, exp: gPlus(d), rest: f.rest }]; return x; });
+            setF({ ...f, n: "", q: "", rest: false }); note(f.n.trim() + " hinzugefügt.");
+          }}>Hinzufügen</button>
+        </div>
+      </>)}
+
+      {sub === "karte" && (<>
+        <span className="lbl">Speisekarte</span>
+        {R.menu.length === 0 && <div className="log">Noch leer. Unten Gerichte eintragen.</div>}
+        {R.menu.map((d) => (
+          <div key={d.id} className="card" style={{ marginTop: 6 }}>
+            <div className="row" style={{ justifyContent: "space-between", gap: 8 }}><b>{d.name}</b><span>CHF {Number(d.price).toFixed(2)}</span></div>
+            <div className="dsc" style={{ marginTop: 4 }}>{d.ings.map((g) => { const it = R.stock.find((x) => x.id === g.item); return (it ? it.name : "?") + " " + g.qty + (it ? it.unit : ""); }).join(" · ")}</div>
+            <div className="dsc">Allergene: {d.allergens || "keine angegeben"}</div>
+            <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={() => mut((x) => { x.menu = x.menu.filter((m) => m.id !== d.id); return x; })}>Entfernen</button>
+          </div>
+        ))}
+        <span className="lbl">Gerichte eintragen</span>
+        <div className="log">Ein Gericht pro Zeile: Name; Preis; Zutat Menge, Zutat Menge; Allergene{"\n"}Beispiel: Lachs-Pasta; 24; Penne 120, Lachs 150, Rahm 80; Gluten, Fisch, Milch{"\n"}Die Zutaten müssen im Bestand stehen.</div>
+        <textarea rows={5} value={f.karte} onChange={(e) => setF({ ...f, karte: e.target.value })} style={inp} />
+        <button className="btn tox" style={{ marginTop: 8 }} onClick={() => {
+          const neu = [], fehl = [];
+          f.karte.split("\n").map((l) => l.trim()).filter(Boolean).forEach((l) => {
+            const p = l.split(";").map((s) => s.trim());
+            const preis = Number(String(p[1] || "").replace(",", "."));
+            if (p.length < 3 || !p[0] || !(preis >= 0)) { fehl.push(l.slice(0, 30)); return; }
+            const ings = [];
+            p[2].split(",").map((s) => s.trim()).filter(Boolean).forEach((z) => {
+              const m = z.match(/^(.*?)\s+(\d+(?:[.,]\d+)?)\s*(?:g|ml|stk)?$/i);
+              const it = m && R.stock.find((x) => x.name.toLowerCase() === m[1].trim().toLowerCase());
+              if (it) ings.push({ item: it.id, qty: Number(m[2].replace(",", ".")) }); else fehl.push((m ? m[1] : z) + " (nicht im Bestand)");
+            });
+            neu.push({ id: gId(), name: p[0].slice(0, 60), price: preis, ings, allergens: p[3] || "" });
+          });
+          if (neu.length) mut((x) => { x.menu = [...x.menu, ...neu]; return x; });
+          setF({ ...f, karte: "" });
+          note(neu.length + " Gericht(e) hinzugefügt." + (fehl.length ? " Nicht erkannt: " + fehl.join(", ") : ""));
+        }}>Eintragen</button>
+      </>)}
+
+      {sub === "res" && (<>
+        <span className="lbl">Reservierungen</span>
+        <div className="dsc">Heute belegt: {gSeats(R, gIso(new Date()))} von {R.profile.seats} Plätzen.</div>
+        {R.res.length === 0 && <div className="log">Noch keine Reservierungen.</div>}
+        {R.res.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((r) => (
+          <div key={r.id} className="card" style={{ marginTop: 6 }}>
+            <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
+              <div><b>{r.name}, {r.n} Pers.</b><div className="dsc">{r.date} · {r.time}</div></div>
+              <button style={bs} className="btn ghost sm" onClick={() => mut((x) => { x.res = x.res.filter((y) => y.id !== r.id); return x; })}>Löschen</button>
+            </div>
+          </div>
+        ))}
+        <span className="lbl">Reservierung eintragen</span>
+        <div className="card">
+          <input placeholder="Name" value={f.rn} onChange={(e) => setF({ ...f, rn: e.target.value })} style={inp} />
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            <input placeholder="Personen" inputMode="numeric" value={f.rp} onChange={(e) => setF({ ...f, rp: e.target.value })} />
+            <input type="date" value={f.rd} onChange={(e) => setF({ ...f, rd: e.target.value })} />
+            <input type="time" value={f.rt} onChange={(e) => setF({ ...f, rt: e.target.value })} />
+          </div>
+          <button className="btn tox" style={{ marginTop: 8 }} onClick={() => { try { resAdd(f.rn.trim(), f.rp, f.rd, f.rt); setF({ ...f, rn: "" }); note("Reservierung eingetragen."); } catch (e) { note(e.message); } }}>Eintragen</button>
+        </div>
+      </>)}
+
+      {sub === "haus" && (<>
+        <span className="lbl">Konzept des Hauses</span>
+        <div className="log">Hier steht, wer das Restaurant ist. Der Agent richtet jede Antwort danach aus.</div>
+        <label className="dsc">Name</label><input value={R.profile.name} onChange={(e) => setP("name", e.target.value)} style={inp} />
+        <label className="dsc">Konzept, Philosophie, Stil</label><textarea rows={6} value={R.profile.concept} onChange={(e) => setP("concept", e.target.value)} style={inp} />
+        <label className="dsc">Öffnungszeiten</label><input value={R.profile.hours} onChange={(e) => setP("hours", e.target.value)} style={inp} />
+        <label className="dsc">Sitzplätze</label><input inputMode="numeric" value={R.profile.seats} onChange={(e) => { const v = Math.round(Number(e.target.value)); if (v > 0) setP("seats", v); }} style={inp} />
+        <label className="dsc">Ton gegenüber Gästen und Team</label><input value={R.profile.tone} onChange={(e) => setP("tone", e.target.value)} style={inp} />
+        <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => { const b = gBeispiel(); speichern({ list: [...db.list, b], cur: b.id }); setChat([]); }}>Beispiel-Restaurant dazuladen</button>
+      </>)}
+    </>
+  );
+}
 
 /* ---------------- DER GENPOOL ---------------- */
 const GENE = [
