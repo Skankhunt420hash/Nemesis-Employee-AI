@@ -75,4 +75,4 @@ Code-Schmiede (Voll-Apps bauen, ändern, reparieren) und Dauer-Missionen laufen 
 - Per Telegram startbar: `app_bauen`, `mission_starten`, `auftraege_liste`.
 
 ## KI-Schlüssel in der App eintragen (ohne Konsole)
-Lab → Werkstatt → «KI-Schlüssel»: alle Schlüssel in EINEM Text einfügen (einer pro Zeile, mit oder ohne Namen). Der Server erkennt den Anbieter (Präfix oder Live-Test), prüft jeden Schlüssel beim Anbieter, speichert nur gültige in `.env` (chmod 600) und nutzt sie sofort, ohne Neustart. Schlüssel werden nie zurückgegeben, nur die letzten 4 Zeichen. Routen: `/schluessel/status[?pruefen=1]`, `/schluessel/speichern` (privat).
+Lab → Werkstatt → «KI-Schlüssel» (Gemini, Groq, OpenRouter, Mistral, Cohere, Together, NVIDIA, OpenAI): alle Schlüssel in EINEM Text einfügen (einer pro Zeile, mit oder ohne Namen). Der Server erkennt den Anbieter (Präfix oder Live-Test), prüft jeden Schlüssel beim Anbieter, speichert nur gültige in `.env` (chmod 600) und nutzt sie sofort, ohne Neustart. Schlüssel werden nie zurückgegeben, nur die letzten 4 Zeichen. Routen: `/schluessel/status[?pruefen=1]`, `/schluessel/speichern` (privat).

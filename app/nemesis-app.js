@@ -82,6 +82,9 @@ const ANBIETER = {
   together:   { frei: true,  url: "https://api.together.xyz/v1/chat/completions",
                 liste: "https://api.together.xyz/v1/models", keys: ["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"],
                 nurFrei: /free/i, standard: "" },
+  nvidia:     { frei: true,  url: "https://integrate.api.nvidia.com/v1/chat/completions",
+                liste: "https://integrate.api.nvidia.com/v1/models", keys: ["NVIDIA_API_KEY", "NVAPI_KEY", "NGC_API_KEY"],
+                standard: "" },
   openai:     { frei: false, url: "https://api.openai.com/v1/chat/completions",
                 liste: "https://api.openai.com/v1/models", keys: ["OPENAI_API_KEY"],
                 standard: "gpt-4o-mini" },
@@ -93,6 +96,7 @@ const KEIN_CHAT = /embed|tts|whisper|audio|image|dall-e|guard|moderation|realtim
 /* ---------- Routing: was fuer welche Aufgabe (gratis zuerst, OpenAI zuletzt) ---------- */
 const WAHL = {
   code: [
+    ["nvidia", [/qwen.*coder/i, /gpt-oss-120b/i]],
     ["groq", [/qwen.*coder/i, /qwen3/i, /gpt-oss-120b/i]],
     ["openrouter", [/qwen3-coder.*:free/i, /coder.*:free/i, /gpt-oss-120b.*:free/i]],
     ["mistral", [/codestral/i, /devstral/i]],
@@ -101,6 +105,7 @@ const WAHL = {
     ["openai", [/^gpt-5\.4-mini/i, /^gpt-5(\.\d)?-mini/i, /^gpt-4\.1-mini/i, /^gpt-4o-mini$/i]],
   ],
   denken: [
+    ["nvidia", [/nemotron.*ultra/i, /gpt-oss-120b/i, /deepseek.*r1/i, /nemotron.*super/i]],
     ["openrouter", [/nemotron.*ultra.*:free/i, /nemotron.*:free/i, /gpt-oss-120b.*:free/i, /deepseek.*r1.*:free/i]],
     ["groq", [/gpt-oss-120b/i, /llama-3\.3-70b/i]],
     ["gemini", [/^gemini-[\d.]+-flash$/i, /flash(?!-lite)/i]],
@@ -114,6 +119,7 @@ const WAHL = {
   ],
   normal: [
     ["groq", [/gpt-oss-120b/i, /llama-3\.3-70b/i]],
+    ["nvidia", [/llama-3\.3-70b/i, /gpt-oss-120b/i, /nemotron/i]],
     ["gemini", [/flash-lite/i, /flash/i]],
     ["cohere", [/command-a/i, /command-r/i]],
     ["openrouter", [/nemotron.*:free/i, /gpt-oss.*:free/i, /qwen.*:free/i, /llama.*70b.*:free/i, /:free$/i]],
@@ -130,7 +136,7 @@ for (const k of Object.keys(WAHL)) WAHL[k] = WAHL[k].concat(RETTUNG);
 // Manuell: "!model <key>" in der Nachricht oder Modell-Wahl im Zahnrad
 const HAND = {
   gemini:     [["gemini", [/flash-lite/i, /flash/i]]],
-  nemotron:   [["openrouter", [/nemotron.*ultra.*:free/i, /nemotron.*:free/i]], ["groq", [/nemotron/i]]],
+  nemotron:   [["openrouter", [/nemotron.*ultra.*:free/i, /nemotron.*:free/i]], ["groq", [/nemotron/i]], ["nvidia", [/nemotron.*ultra/i, /nemotron/i]]],
   qwen:       [["groq", [/qwen.*coder/i, /qwen/i]], ["openrouter", [/qwen3-coder.*:free/i, /qwen.*:free/i]]],
   cohere:     [["cohere", [/command-a/i, /command-r/i]]],
   gptoss:     [["groq", [/gpt-oss-120b/i]], ["openrouter", [/gpt-oss-120b.*:free/i, /gpt-oss.*:free/i]]],
@@ -3406,7 +3412,7 @@ async function bgMission(job) {
    Erkennt den Anbieter selbst, prueft live, speichert in .env (chmod 600),
    gilt sofort (ohne Neustart). Schluessel werden nie zurueckgegeben, nur die letzten 4 Zeichen.
    ===================================================================== */
-const SK_NAMEN = { groq: "Groq", openrouter: "OpenRouter", gemini: "Google Gemini", mistral: "Mistral", cohere: "Cohere", together: "Together", openai: "OpenAI" };
+const SK_NAMEN = { groq: "Groq", openrouter: "OpenRouter", gemini: "Google Gemini", mistral: "Mistral", cohere: "Cohere", together: "Together", nvidia: "NVIDIA", openai: "OpenAI" };
 function skEnde(k) { k = String(k || ""); return k.length > 8 ? "…" + k.slice(-4) : ""; }
 async function skPruefe(anb, key) {
   const A = ANBIETER[anb]; if (!A) return { ok: false, status: 0 };
@@ -3419,8 +3425,11 @@ async function skPruefe(anb, key) {
 }
 function skErkennen(text) {
   const out = [], gesehen = new Set();
+  let etikett = "";
   for (const roh of String(text || "").split(/[\s,;]+/)) {
     if (!roh) continue;
+    const em = roh.match(/^(groq|openrouter|gemini|google|mistral|cohere|together|nvidia|nim|openai|chatgpt)[:=\-]*$/i);
+    if (em) { etikett = em[1].toLowerCase(); continue; }
     let name = "", wert = roh;
     const m = roh.match(/^(?:export)?([A-Za-z0-9_]{2,40})[=:](.+)$/);
     if (m) { name = m[1].toUpperCase(); wert = m[2]; }
@@ -3428,11 +3437,14 @@ function skErkennen(text) {
     const k = wert.match(/[A-Za-z0-9_\-.]{20,}$/); if (!k) continue;
     wert = k[0]; if (gesehen.has(wert)) continue; gesehen.add(wert);
     let kand = [];
+    if (!name && etikett) name = ({ google: "GEMINI", nim: "NVIDIA", chatgpt: "OPENAI" })[etikett] || etikett.toUpperCase();
+    etikett = "";
     for (const [n, A] of Object.entries(ANBIETER)) if (name && (A.keys.includes(name) || name.startsWith(n.toUpperCase()) || (n === "gemini" && /^GOOGLE/.test(name)))) kand.push(n);
     if (!kand.length) {
       if (/^gsk_/.test(wert)) kand = ["groq"];
       else if (/^sk-or-/.test(wert)) kand = ["openrouter"];
       else if (/^AIza/.test(wert)) kand = ["gemini"];
+      else if (/^nvapi-/.test(wert)) kand = ["nvidia"];
       else if (/^sk-ant-/.test(wert)) { out.push({ ende: skEnde(wert), ok: false, meldung: "Claude-Schluessel wird hier nicht gebraucht." }); continue; }
       else if (/^(sk-|sess-)/.test(wert)) kand = ["openai"];
       else kand = ["mistral", "cohere", "together"];
@@ -3466,7 +3478,7 @@ async function skSpeichern(text) {
       erg.push({ anbieter: ok, name: SK_NAMEN[ok] || ok, ende: skEnde(g.wert), ok: true, meldung: "gueltig, gespeichert" });
     } else {
       erg.push({ anbieter: g.kand.length === 1 ? g.kand[0] : "", name: g.kand.length === 1 ? (SK_NAMEN[g.kand[0]] || g.kand[0]) : "Unbekannt", ende: skEnde(g.wert), ok: false,
-        meldung: letzte === 401 || letzte === 403 ? "Anbieter lehnt ab (falsch kopiert oder widerrufen)" : letzte === 0 ? "Anbieter nicht erreichbar, nichts gespeichert" : "Anbieter antwortet " + letzte + ", nichts gespeichert" });
+        meldung: g.kand.length > 1 ? "Kein Anbieter erkennt den Schluessel. Schreib den Namen davor, z.B. «Mistral: …» (oder Groq, Gemini, NVIDIA, Cohere)" : letzte === 401 || letzte === 403 ? "Anbieter lehnt ab (falsch kopiert oder widerrufen)" : letzte === 0 ? "Anbieter nicht erreichbar, nichts gespeichert" : "Anbieter antwortet " + letzte + ", nichts gespeichert" });
     }
   }
   return erg;

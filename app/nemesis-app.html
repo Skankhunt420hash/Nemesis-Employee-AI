@@ -6473,7 +6473,7 @@ function SchluesselZentrale() {
     } catch (e) { setErr(e.message === "ALT" ? "Der Server kennt das noch nicht. Zahnrad → „Server aktualisieren“, ca. 5 Minuten warten." : e.message); }
     setBusy(false);
   };
-  const GRATIS = [["Google Gemini", "aistudio.google.com/apikey"], ["Groq", "console.groq.com/keys"], ["OpenRouter", "openrouter.ai/settings/keys"], ["Mistral", "console.mistral.ai/api-keys"], ["Cohere", "dashboard.cohere.com/api-keys"]];
+  const GRATIS = [["Google Gemini", "aistudio.google.com/apikey"], ["Groq", "console.groq.com/keys"], ["OpenRouter", "openrouter.ai/settings/keys"], ["Mistral", "console.mistral.ai/api-keys"], ["Cohere", "dashboard.cohere.com/api-keys"], ["NVIDIA", "build.nvidia.com (Modell öffnen → Get API Key)"]];
   return (
     <>
       <div className="log">Hol dir die Schlüssel auf den Seiten unten (gratis), kopiere sie und füge <b>alle zusammen</b> hier ein, einen pro Zeile. Du musst nichts dazu schreiben: Die App erkennt den Anbieter selbst, prüft jeden Schlüssel live und speichert nur die gültigen. Danach gilt es sofort, ohne Neustart.</div>
