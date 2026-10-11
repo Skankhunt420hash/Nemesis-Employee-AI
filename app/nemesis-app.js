@@ -400,7 +400,7 @@ async function behandle(req, res, url, CORS) {
     try { return await betriebOeffentlich(p, req, res, url, CORS); }
     catch (e) { console.warn("[betrieb] " + e.message); json(res, 500, { error: "Fehler" }, {}); return true; }
   }
-  const unsere = p.startsWith("/betrieb/") || p.startsWith("/apps/") || p.startsWith("/telegram/") || p.startsWith("/bg/") || p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status" || p === "/update"
+  const unsere = p.startsWith("/betrieb/") || p.startsWith("/apps/") || p.startsWith("/telegram/") || p.startsWith("/bg/") || p.startsWith("/schluessel/") || p === "/app" || p === "/app/" || p === "/llm" || p === "/llm/status" || p === "/update"
               || p === "/manifest.webmanifest" || p === "/icon.svg" || p === "/welt" || p.startsWith("/welt/");
   if (!unsere) return false;
 
@@ -431,6 +431,11 @@ async function behandle(req, res, url, CORS) {
     if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
     try { return await bgIntern(p, req, res, url, CORS); }
     catch (e) { console.warn("[bg] " + e.message); json(res, 500, { error: "Auftrags-Fehler: " + e.message }, CORS); return true; }
+  }
+  if (p.startsWith("/schluessel/")) {
+    if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
+    try { return await skIntern(p, req, res, url, CORS); }
+    catch (e) { console.warn("[schluessel] " + e.message); json(res, 500, { error: "Schluessel-Fehler" }, CORS); return true; }
   }
   if (p.startsWith("/telegram/")) {
     if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return true; }
@@ -3394,6 +3399,103 @@ async function bgMission(job) {
     bgOk(job);
   }
   job.ergebnis = { text: m.ergebnis };
+}
+
+/* =====================================================================
+   SCHLUESSEL-ZENTRALE: alle KI-Schluessel in EINEM Text einfuegen.
+   Erkennt den Anbieter selbst, prueft live, speichert in .env (chmod 600),
+   gilt sofort (ohne Neustart). Schluessel werden nie zurueckgegeben, nur die letzten 4 Zeichen.
+   ===================================================================== */
+const SK_NAMEN = { groq: "Groq", openrouter: "OpenRouter", gemini: "Google Gemini", mistral: "Mistral", cohere: "Cohere", together: "Together", openai: "OpenAI" };
+function skEnde(k) { k = String(k || ""); return k.length > 8 ? "…" + k.slice(-4) : ""; }
+async function skPruefe(anb, key) {
+  const A = ANBIETER[anb]; if (!A) return { ok: false, status: 0 };
+  const url = anb === "openrouter" ? "https://openrouter.ai/api/v1/key" : A.liste;
+  const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const r = await fetch(url, { headers: { Authorization: "Bearer " + key }, signal: ctrl.signal });
+    return { ok: r.status === 200, status: r.status };
+  } catch (e) { return { ok: false, status: 0 }; } finally { clearTimeout(t); }
+}
+function skErkennen(text) {
+  const out = [], gesehen = new Set();
+  for (const roh of String(text || "").split(/[\s,;]+/)) {
+    if (!roh) continue;
+    let name = "", wert = roh;
+    const m = roh.match(/^(?:export)?([A-Za-z0-9_]{2,40})[=:](.+)$/);
+    if (m) { name = m[1].toUpperCase(); wert = m[2]; }
+    wert = sauber(wert);
+    const k = wert.match(/[A-Za-z0-9_\-.]{20,}$/); if (!k) continue;
+    wert = k[0]; if (gesehen.has(wert)) continue; gesehen.add(wert);
+    let kand = [];
+    for (const [n, A] of Object.entries(ANBIETER)) if (name && (A.keys.includes(name) || name.startsWith(n.toUpperCase()) || (n === "gemini" && /^GOOGLE/.test(name)))) kand.push(n);
+    if (!kand.length) {
+      if (/^gsk_/.test(wert)) kand = ["groq"];
+      else if (/^sk-or-/.test(wert)) kand = ["openrouter"];
+      else if (/^AIza/.test(wert)) kand = ["gemini"];
+      else if (/^sk-ant-/.test(wert)) { out.push({ ende: skEnde(wert), ok: false, meldung: "Claude-Schluessel wird hier nicht gebraucht." }); continue; }
+      else if (/^(sk-|sess-)/.test(wert)) kand = ["openai"];
+      else kand = ["mistral", "cohere", "together"];
+    }
+    out.push({ wert, kand });
+  }
+  return out;
+}
+function skSchreiben(variable, wert) {
+  const f = path.join(DIR, ".env"); let zeilen = [];
+  try { zeilen = fs.readFileSync(f, "utf8").split(/\r?\n/); } catch (e) {}
+  zeilen = zeilen.filter((z) => !new RegExp("^\\s*(export\\s+)?" + variable + "\\s*=").test(z));
+  while (zeilen.length && zeilen[zeilen.length - 1] === "") zeilen.pop();
+  zeilen.push(variable + "=" + wert);
+  fs.writeFileSync(f, zeilen.join("\n") + "\n", { mode: 0o600 });
+  try { fs.chmodSync(f, 0o600); } catch (e) {}
+  process.env[variable] = wert; envCache = null;
+}
+async function skSpeichern(text) {
+  const gefunden = skErkennen(text).slice(0, 12), erg = [];
+  for (const g of gefunden) {
+    if (!g.kand) { erg.push(g); continue; }
+    let ok = null, letzte = 0;
+    for (const anb of g.kand) {
+      const r = await skPruefe(anb, g.wert); letzte = r.status;
+      if (r.ok) { ok = anb; break; }
+    }
+    if (ok) {
+      skSchreiben(ANBIETER[ok].keys[0], g.wert);
+      delete listen[ok]; delete pause[ok];
+      erg.push({ anbieter: ok, name: SK_NAMEN[ok] || ok, ende: skEnde(g.wert), ok: true, meldung: "gueltig, gespeichert" });
+    } else {
+      erg.push({ anbieter: g.kand.length === 1 ? g.kand[0] : "", name: g.kand.length === 1 ? (SK_NAMEN[g.kand[0]] || g.kand[0]) : "Unbekannt", ende: skEnde(g.wert), ok: false,
+        meldung: letzte === 401 || letzte === 403 ? "Anbieter lehnt ab (falsch kopiert oder widerrufen)" : letzte === 0 ? "Anbieter nicht erreichbar, nichts gespeichert" : "Anbieter antwortet " + letzte + ", nichts gespeichert" });
+    }
+  }
+  return erg;
+}
+async function skStatus(pruefen) {
+  const l = [];
+  for (const [n, A] of Object.entries(ANBIETER)) {
+    const k = schluessel(A.keys); const o = { anbieter: n, name: SK_NAMEN[n] || n, gesetzt: !!k, ende: skEnde(k), gratis: !!A.frei, gueltig: null };
+    if (k && pruefen) o.gueltig = (await skPruefe(n, k)).ok;
+    l.push(o);
+  }
+  return l;
+}
+async function skIntern(p, req, res, url, CORS) {
+  const POST = req.method === "POST";
+  if (p === "/schluessel/status" && !POST) { json(res, 200, { ok: true, anbieter: await skStatus(url.searchParams.get("pruefen") === "1") }, CORS); return true; }
+  if (p === "/schluessel/speichern" && POST) {
+    let b = null; try { b = JSON.parse(await lies(req, 64 * 1024)); } catch (e) {}
+    if (!b || typeof b.text !== "string" || b.text.length < 15) { json(res, 400, { error: "Fuege mindestens einen Schluessel ein." }, CORS); return true; }
+    const ergebnis = await skSpeichern(b.text);
+    if (!ergebnis.length) { json(res, 400, { error: "Ich habe keinen Schluessel im Text gefunden." }, CORS); return true; }
+    let test = null;
+    if (ergebnis.some((x) => x.ok)) {
+      try { const r = await global.__nxApp.kern.rotiere({ messages: [{ role: "user", content: "Sag nur OK" }], max_tokens: 20, art: "normal" });
+        test = r.status === 200 ? { anbieter: r.body.anbieter || "", modell: r.body.modell || "" } : { fehler: (r.body && r.body.error) || "keine Antwort" }; } catch (e) { test = { fehler: e.message }; }
+    }
+    json(res, 200, { ok: true, ergebnis, test, anbieter: await skStatus(false) }, CORS); return true;
+  }
+  json(res, 404, { error: "Unbekannt" }, CORS); return true;
 }
 
 /* ----- Routen (privat, /bg/...) ----- */

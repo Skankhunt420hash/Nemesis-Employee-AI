@@ -2939,6 +2939,7 @@ const TOOLS = [
   { id: "repair", n: "Agent Repair", d: "Vollständige Diagnose: Gesundheits-Score, kritische Probleme, automatische Reparatur.", ic: "⚕" },
   { id: "marketplace", n: "Agent Marketplace", d: "Agenten exportieren, importieren und aus fertigen Templates starten.", ic: "⇄" },
   { id: "codeforge", n: "Code-Schmiede", d: "Beschreib eine App — der Agent baut sie wirklich: Server, Datenbank, Login, Oberfläche. Läuft live auf deinem Server, als ZIP oder als Android-App.", ic: "◐" },
+  { id: "schluessel", n: "KI-Schlüssel", d: "Alle API-Schlüssel in einem Text einfügen. Die App erkennt den Anbieter, prüft live und speichert auf dem Server. Keine Konsole nötig.", ic: "🔑" },
   { id: "telegram", n: "Telegram-Zentrale", d: "Steuere deine Agenten per Telegram: Befehle, Notizen, Recherche, Betriebe verwalten und Zeitpläne, die von selbst laufen.", ic: "✈" },
   { id: "wipe", n: "Totalreset", d: "Löscht alles im Labor. Kein Zurück.", ic: "✖", danger: true },
 ];
@@ -2946,7 +2947,7 @@ const TOOLS = [
 function Workshop(ctx) {
   const { tool, setTool } = ctx;
   if (tool) {
-    const T = { gastro: GastroAgent, breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: KundenDossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, telegram: TelegramZentrale, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
+    const T = { gastro: GastroAgent, breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: KundenDossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, schluessel: SchluesselZentrale, telegram: TelegramZentrale, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
     return (<><button className="back" onClick={() => setTool(null)}>← Werkbank</button><T {...ctx} /></>);
   }
   return (
@@ -6449,6 +6450,57 @@ const TGJ_VORLAGEN = [
   { name: "Wochenrueckblick", wann: "woechentlich fr 17:00", aufgabe: "Mach einen kurzen Wochenrueckblick: was lief, was ist offen, was sollte ich naechste Woche anpacken. Nutze meine Notizen und die Betriebsdaten." },
 ];
 const tgZeit = (ms) => { if (!ms) return "–"; const d = new Date(ms); return d.toLocaleString("de-CH", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); };
+
+function SchluesselZentrale() {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [erg, setErg] = useState(null);
+  const [test, setTest] = useState(null);
+  const [liste, setListe] = useState(null);
+  const [err, setErr] = useState("");
+  const laden = async (pruefen) => {
+    try { const r = await wApi("/schluessel/status" + (pruefen ? "?pruefen=1" : "")); setListe(r.anbieter); }
+    catch (e) { setErr(e.message === "KEIN_SERVER" ? "Kein Nemesis-Server verbunden (öffne die App über deinen Server-Link)." : e.message === "ALT" ? "Der Server kennt das noch nicht. Zahnrad → „Server aktualisieren“, ca. 5 Minuten warten." : e.message); }
+  };
+  useEffect(() => { laden(true); }, []);
+  const speichern = async () => {
+    setBusy(true); setErr(""); setErg(null); setTest(null);
+    try {
+      const r = await wPost("/schluessel/speichern", { text });
+      setErg(r.ergebnis || []); setTest(r.test || null); setListe(r.anbieter || liste);
+      if ((r.ergebnis || []).some((x) => x.ok)) setText("");
+      laden(true);
+    } catch (e) { setErr(e.message === "ALT" ? "Der Server kennt das noch nicht. Zahnrad → „Server aktualisieren“, ca. 5 Minuten warten." : e.message); }
+    setBusy(false);
+  };
+  const GRATIS = [["Google Gemini", "aistudio.google.com/apikey"], ["Groq", "console.groq.com/keys"], ["OpenRouter", "openrouter.ai/settings/keys"], ["Mistral", "console.mistral.ai/api-keys"], ["Cohere", "dashboard.cohere.com/api-keys"]];
+  return (
+    <>
+      <div className="log">Hol dir die Schlüssel auf den Seiten unten (gratis), kopiere sie und füge <b>alle zusammen</b> hier ein, einen pro Zeile. Du musst nichts dazu schreiben: Die App erkennt den Anbieter selbst, prüft jeden Schlüssel live und speichert nur die gültigen. Danach gilt es sofort, ohne Neustart.</div>
+      <span className="lbl">Schlüssel einfügen</span>
+      <textarea value={text} style={{ minHeight: 150, fontFamily: "monospace", fontSize: 13 }} onChange={(e) => setText(e.target.value)} placeholder={"gsk_…\nsk-or-v1-…\nAIza…\nsk-proj-…"} autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+      <div style={{ height: 10 }} />
+      <button className="btn tox" onClick={speichern} disabled={busy || text.trim().length < 15}>{busy ? "prüft …" : "Prüfen und speichern"}</button>
+      {err && <div className="log err" style={{ marginTop: 10 }}>{err}</div>}
+      {erg && (
+        <>
+          <span className="lbl" style={{ marginTop: 14 }}>Ergebnis</span>
+          {erg.map((x, i) => <div key={i} className={"log " + (x.ok ? "done" : "err")}>{x.ok ? "✅ " : "❌ "}{x.name || "Schlüssel"} {x.ende} · {x.meldung}</div>)}
+          {test && (test.fehler ? <div className="log warn">Testfrage ans Modell: {test.fehler}</div> : <div className="log done">Test bestanden. Automatik nimmt jetzt: {test.anbieter} {test.modell}</div>)}
+        </>
+      )}
+      <span className="lbl" style={{ marginTop: 14 }}>Was auf dem Server steht</span>
+      {!liste && !err && <div className="log">lädt …</div>}
+      {liste && liste.map((x) => (
+        <div key={x.anbieter} className={"log " + (!x.gesetzt ? "" : x.gueltig === false ? "err" : x.gueltig ? "done" : "warn")}>
+          {!x.gesetzt ? "○ " : x.gueltig === false ? "❌ " : x.gueltig ? "✅ " : "… "}{x.name}{x.gratis ? " (gratis)" : ""} · {!x.gesetzt ? "fehlt" : x.gueltig === false ? "ungültig " + x.ende : x.gueltig ? "gültig " + x.ende : "prüft " + x.ende}
+        </div>
+      ))}
+      <span className="lbl" style={{ marginTop: 14 }}>Wo bekomme ich die (gratis)?</span>
+      <div className="log">{GRATIS.map((g) => g[0] + ": " + g[1]).join("\n")}</div>
+    </>
+  );
+}
 
 function TelegramZentrale({ agents }) {
   const [st, setSt] = useState(null);
