@@ -1464,6 +1464,9 @@ const crypto = require("crypto");
 const B_S = (k, l, t) => ({ k, l, t: t || "text" });
 const B_TAB = (name, label, spalten, opt) => Object.assign({ name, label, spalten, zeilen: [], zaehler: 0 }, opt || {});
 
+function bTagesTab() {
+  return B_TAB("tagesangebot", "Tagesangebot (Gericht des Abends, Tagesmenue)", [B_S("datum", "Datum", "datum"), B_S("gang", "Art (z.B. Gericht des Abends, Mittagsmenue, Suppe)"), B_S("name", "Gericht"), B_S("preis", "Preis", "zahl"), B_S("beschreibung", "Beschreibung"), B_S("allergene", "Allergene")], { oeffentlich: true });
+}
 function bVorlage(art) {
   const anfragen = () => B_TAB("anfragen", "Anfragen", [B_S("name", "Name"), B_S("kontakt", "Telefon oder E-Mail"), B_S("nachricht", "Nachricht"), B_S("status", "Status (neu/erledigt)")], { schreibenOeffentlich: true });
   const aufgaben = () => B_TAB("aufgaben", "Aufgaben", [B_S("titel", "Aufgabe"), B_S("faellig", "Faellig", "datum"), B_S("status", "Status (offen/erledigt)"), B_S("notiz", "Notiz")]);
@@ -1486,6 +1489,7 @@ function bVorlage(art) {
   }
   return { einstellungen: einst, tabellen: [
     B_TAB("speisekarte", "Speisekarte", [B_S("name", "Gericht"), B_S("kategorie", "Kategorie"), B_S("preis", "Preis", "zahl"), B_S("beschreibung", "Beschreibung"), B_S("allergene", "Allergene"), B_S("verfuegbar", "Verfuegbar (ja/nein)")], { oeffentlich: true }),
+    bTagesTab(),
     B_TAB("lager", "Lager", [B_S("name", "Artikel"), B_S("menge", "Menge", "zahl"), B_S("einheit", "Einheit"), B_S("min", "Mindestmenge", "zahl"), B_S("einkaufspreis", "Einkaufspreis je Einheit", "zahl"), B_S("lieferant", "Lieferant"), B_S("haltbar_bis", "Haltbar bis", "datum"), B_S("notiz", "Notiz")]),
     B_TAB("reservierungen", "Reservierungen", [B_S("name", "Name"), B_S("telefon", "Telefon"), B_S("personen", "Personen", "zahl"), B_S("datum", "Datum", "datum"), B_S("zeit", "Zeit", "zeit"), B_S("notiz", "Notiz"), B_S("status", "Status (neu/bestaetigt/abgesagt/erschienen)")], { schreibenOeffentlich: true }),
     B_TAB("bestellungen", "Bestellungen", [B_S("kunde", "Kunde"), B_S("kontakt", "Kontakt"), B_S("positionen", "Positionen"), B_S("summe", "Summe", "zahl"), B_S("art", "Art (abholung/lieferung/tisch)"), B_S("status", "Status (neu/in Arbeit/fertig/erledigt)"), B_S("notiz", "Notiz")], { schreibenOeffentlich: true }),
@@ -1499,7 +1503,14 @@ function bDemo(art) {
     lager: [{ name: "Kartoffeln", menge: 12, einheit: "kg", min: 20, einkaufspreis: 1.4, lieferant: "Bauernhof Meier" }, { name: "Kalbfleisch", menge: 4, einheit: "kg", min: 5, einkaufspreis: 32, lieferant: "Metzgerei Huber" }, { name: "Eier", menge: 60, einheit: "Stk", min: 30, einkaufspreis: 0.4, lieferant: "Bauernhof Meier" }, { name: "Rahm", menge: 2, einheit: "l", min: 6, einkaufspreis: 4.2, lieferant: "Molkerei Alpina" }] };
 }
 
-function bLaden(id) { if (!/^[a-z0-9][a-z0-9-]{2,40}$/.test(String(id))) return null; try { return JSON.parse(fs.readFileSync(path.join(SYNC_DIR, "_betrieb-" + id + ".json"), "utf8")); } catch (e) { return null; } }
+function bLaden(id) {
+  if (!/^[a-z0-9][a-z0-9-]{2,40}$/.test(String(id))) return null;
+  try {
+    const b = JSON.parse(fs.readFileSync(path.join(SYNC_DIR, "_betrieb-" + id + ".json"), "utf8"));
+    if (b.preset === "restaurant" && b.tabellen && !b.tabellen.tagesangebot) b.tabellen.tagesangebot = bTagesTab();   // aeltere Restaurants bekommen die neue Tabelle automatisch
+    return b;
+  } catch (e) { return null; }
+}
 function bSpeichern(b) {
   fs.mkdirSync(SYNC_DIR, { recursive: true });
   const f = path.join(SYNC_DIR, "_betrieb-" + b.id + ".json");
@@ -1756,8 +1767,8 @@ function bSystem(b, rolle) {
     benachrichtigen: '{"werkzeug":"benachrichtigen","args":{"text":"..."}} - Nachricht in den Posteingang des Betriebs',
   };
   const regeln = rolle === "besitzer"
-    ? `Du sprichst mit dem Inhaber oder Team von «${b.name}». Du hast volle Rechte auf alle Tabellen. Arbeite wie ein guter Betriebsassistent: Lager analysieren (was ist unter Mindestmenge, was laeuft ab, was kostet der Bestand), Einkaufslisten nach Lieferant gruppieren, Reservierungen und Bestellungen ordnen, Tagesberichte schreiben, Daten eintragen, die der Inhaber diktiert oder einfuegt (zerlege Listen in einzelne Zeilen und trage sie mit EINEM schreiben-Aufruf ein). Lies zuerst die Daten, dann antworte mit konkreten Zahlen. Nach jeder Aenderung sage klar, was du geaendert hast. Loeschen nur, wenn der Inhaber es verlangt.`
-    : `Du sprichst mit einem Gast oder Kunden von «${b.name}». Du darfst Oeffnungszeiten und Infos nennen, freie Plaetze pruefen, Speisekarte bzw. Produkte lesen, und Reservierungen, Bestellungen oder Anfragen aufnehmen. Du siehst und nennst NIEMALS Daten anderer Gaeste, Lagerbestaende, Einkaufspreise oder Umsaetze. Reservierung: zuerst reservierung_pruefen, dann Name, Telefon, Personen, Datum und Uhrzeit erfragen, dann schreiben, dann Bestaetigung nennen. Bei Dingen, die du nicht kannst (Beschwerden, Sonderwuensche, Rueckerstattungen), nimm die Anfrage mit "schreiben" in "anfragen" auf oder nutze "benachrichtigen" und sage, dass sich der Betrieb meldet.`;
+    ? `Du sprichst mit dem Inhaber oder Team von «${b.name}». Du hast volle Rechte auf alle Tabellen. Nennt der Inhaber das Gericht des Abends oder Tagesmenue, trage es mit schreiben in die Tabelle tagesangebot ein (datum = genanntes Datum, sonst heute; gang, name, preis, beschreibung, allergene) und ersetze einen alten Eintrag fuer denselben Tag und dieselbe Art. Arbeite wie ein guter Betriebsassistent: Lager analysieren (was ist unter Mindestmenge, was laeuft ab, was kostet der Bestand), Einkaufslisten nach Lieferant gruppieren, Reservierungen und Bestellungen ordnen, Tagesberichte schreiben, Daten eintragen, die der Inhaber diktiert oder einfuegt (zerlege Listen in einzelne Zeilen und trage sie mit EINEM schreiben-Aufruf ein). Lies zuerst die Daten, dann antworte mit konkreten Zahlen. Nach jeder Aenderung sage klar, was du geaendert hast. Loeschen nur, wenn der Inhaber es verlangt.`
+    : `Du sprichst mit einem Gast oder Kunden von «${b.name}». Du darfst Oeffnungszeiten und Infos nennen, freie Plaetze pruefen, Speisekarte bzw. Produkte lesen, und Reservierungen, Bestellungen oder Anfragen aufnehmen. Du siehst und nennst NIEMALS Daten anderer Gaeste, Lagerbestaende, Einkaufspreise oder Umsaetze. Fragt jemand nach dem Gericht des Abends, dem Tagesmenue, der Tagessuppe oder "was gibt es heute": lies zuerst die Tabelle tagesangebot (falls vorhanden) mit Filter datum = heute und nenne Gericht, Preis und Allergene. Steht dort nichts fuer heute, sag ehrlich, dass heute noch kein Tagesangebot eingetragen ist, und schlage 2 bis 3 Gerichte aus der Speisekarte vor. Reservierung: zuerst reservierung_pruefen, dann Name, Telefon, Personen, Datum und Uhrzeit erfragen, dann schreiben, dann Bestaetigung nennen. Bei Dingen, die du nicht kannst (Beschwerden, Sonderwuensche, Rueckerstattungen), nimm die Anfrage mit "schreiben" in "anfragen" auf oder nutze "benachrichtigen" und sage, dass sich der Betrieb meldet.`;
   return `${b.prompt || "Du bist ein freundlicher digitaler Assistent."}
 
 # BETRIEBS-WERKZEUGE

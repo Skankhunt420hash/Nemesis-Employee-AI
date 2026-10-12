@@ -76,3 +76,6 @@ Code-Schmiede (Voll-Apps bauen, ändern, reparieren) und Dauer-Missionen laufen 
 
 ## KI-Schlüssel in der App eintragen (ohne Konsole)
 Lab → Werkstatt → «KI-Schlüssel» (Gemini, Groq, OpenRouter, Mistral, Cohere, Together, NVIDIA, OpenAI): alle Schlüssel in EINEM Text einfügen (einer pro Zeile, mit oder ohne Namen). Der Server erkennt den Anbieter (Präfix oder Live-Test), prüft jeden Schlüssel beim Anbieter, speichert nur gültige in `.env` (chmod 600) und nutzt sie sofort, ohne Neustart. Schlüssel werden nie zurückgegeben, nur die letzten 4 Zeichen. Routen: `/schluessel/status[?pruefen=1]`, `/schluessel/speichern` (privat).
+
+## Restaurant: Tagesangebot (Gericht des Abends)
+Restaurants haben die öffentliche Tabelle `tagesangebot` (Datum, Art, Gericht, Preis, Beschreibung, Allergene); ältere Restaurants bekommen sie beim Laden automatisch. Der Inhaber sagt dem Agenten «Gericht des Abends ist …», er trägt es ein. Gäste-Agent liest «heute»; fehlt der Eintrag, sagt er das ehrlich und empfiehlt aus der Karte. Reservierungen: Kapazität wird geprüft, nie überbucht.
