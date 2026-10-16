@@ -46,6 +46,7 @@ function nav(){var ungel=D?D.inbox.filter(function(x){return !x.gelesen}).length
   Array.prototype.forEach.call(document.querySelectorAll("nav button"),function(b){b.onclick=function(){tab=b.getAttribute("data-t");form=false;auswahl=null;draw()}})}
 function draw(){if(!D)return;document.getElementById("nm").textContent=D.name;document.getElementById("sb").textContent=D.agentName+" · "+D.preset;nav();
   var m=document.getElementById("m");m.innerHTML="";
+  aboBanner(m);
   if(tab==="agent")zAgent(m);else if(tab==="daten")zDaten(m);else if(tab==="post")zPost(m);else if(tab==="teilen")zTeilen(m);else zEinst(m)}
 var SCH=["Prüf mein Lager: was ist unter Mindestmenge? Mach eine Einkaufsliste nach Lieferant.","Welche Reservierungen und Bestellungen sind heute und morgen offen? Ordne sie nach Uhrzeit.","Schreib mir einen Tagesbericht: Lager, Reservierungen, offene Bestellungen, Auffälligkeiten.","Was ist das Lager insgesamt wert, aufgeteilt nach Lieferant?"],SCHL=["📦 Lager prüfen","📅 Heute & morgen","📝 Tagesbericht","💰 Lagerwert"];
 function zAgent(m){
@@ -103,7 +104,22 @@ function zTeilen(m){var o=location.origin,chat=o+"/b/"+ID+"/chat",code='<script 
   var ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
   var c=$('<div class="card"><b>Auf dein Handy</b><small class="t"></small></div>');c.querySelector("small").textContent=ios?"iPhone: unten auf «Teilen» tippen → «Zum Home-Bildschirm». Dann hast du den Assistenten als App mit eigenem Symbol.":"Android: Browser-Menü (⋮) → «App installieren» bzw. «Zum Startbildschirm». Dann hast du den Assistenten als App mit eigenem Symbol.";m.appendChild(c);
   if(window.__ip){var bi=$('<button class="btn s" style="margin-top:10px">Jetzt installieren</button>');bi.onclick=function(){window.__ip.prompt()};c.appendChild(bi)}}
-function zEinst(m){var e=D.einstellungen,o=location.origin,chat=o+"/b/"+ID+"/chat",code='<script src="'+o+'/b/'+ID+'/embed.js" async></'+'script>';
+function aboText(A){if(!A)return"";var s=A.status;
+  if(s==="test")return A.ok?"Testphase: noch "+A.tage+" Tag(e).":"Testphase beendet.";
+  if(s==="aktiv")return A.manuell?"Abo aktiv bis "+new Date(A.ende).toLocaleDateString("de-CH")+".":"Abo aktiv.";
+  if(s==="ueberfaellig")return"Zahlung fehlgeschlagen. Bitte Zahlungsart prüfen.";
+  if(s==="gekuendigt")return A.ok?"Gekündigt, läuft bis "+new Date(A.ende).toLocaleDateString("de-CH")+".":"Abo beendet.";
+  if(s==="pausiert")return"Pausiert.";return"Kostenlos freigeschaltet."}
+function aboBanner(m){var A=D.abo;if(!A||A.status==="gratis"||(A.status==="aktiv"&&A.ok&&!A.manuell))return;
+  var zeigen=!A.ok||A.status==="ueberfaellig"||A.status==="gekuendigt"||(A.status==="test"&&A.tage<=5)||(A.status==="aktiv"&&A.manuell&&A.tage<=5);if(!zeigen)return;
+  var d=$('<div class="card" style="border-color:'+(A.ok?"var(--y)":"var(--r)")+'"><b>'+(A.ok?"Abo":"Assistent pausiert")+'</b><div style="margin:6px 0">'+esc(aboText(A))+(A.ok?"":" Mit dem Abo läuft er sofort weiter.")+'</div></div>');
+  if(D.bezahlbar){var a=document.createElement("a");a.className="btn";a.style.display="inline-block";a.style.textDecoration="none";a.href="/b/"+ID+"/abo";a.textContent=A.status==="ueberfaellig"&&A.stripeKunde?"Zahlungsart prüfen":"Jetzt abonnieren (CHF "+A.preis+" / Monat)";if(A.status==="ueberfaellig"&&A.stripeKunde)a.href="/b/"+ID+"/abo/portal?t="+TOK;d.appendChild(a)}
+  m.appendChild(d)}
+function aboKarte(m){var A=D.abo;if(!A)return;var d=$('<div class="card"><b>Abo</b><div style="margin:6px 0">'+esc(aboText(A))+'</div></div>');
+  if(D.bezahlbar){var a=document.createElement("a");a.className="btn g s";a.style.display="inline-block";a.style.textDecoration="none";
+    if(A.stripeKunde){a.href="/b/"+ID+"/abo/portal?t="+TOK;a.textContent="Abo verwalten / kündigen"}else if(A.status!=="gratis"){a.href="/b/"+ID+"/abo";a.textContent="Abo bezahlen (CHF "+A.preis+" / Monat)"}else a=null;if(a)d.appendChild(a)}
+  m.appendChild(d)}
+function zEinst(m){aboKarte(m);var e=D.einstellungen,o=location.origin,chat=o+"/b/"+ID+"/chat",code='<script src="'+o+'/b/'+ID+'/embed.js" async></'+'script>';
   var f=[["name","Name des Betriebs"],["oeffnungszeiten","Öffnungszeiten (z.B. Di–Sa 11:30–14:00 und 17:30–23:00, So/Mo Ruhetag)"],["adresse","Adresse"],["telefon","Telefon"],["regeln","Hinweise für den Agenten (z.B. Hunde erlaubt, Gruppen ab 8 nur auf Anfrage)"],["kapazitaet","Plätze pro Zeitfenster (für Reservierungen)"],["dauer_min","Dauer einer Reservierung in Minuten"]];
   m.appendChild($('<div class="card"><b>Betrieb</b>'+f.map(function(x){return '<label>'+esc(x[1])+'</label><input data-e="'+x[0]+'" value="'+esc(e[x[0]])+'">'}).join("")+'<label>Reservierungen automatisch bestätigen</label><select data-e="auto_bestaetigen"><option value="1"'+(e.auto_bestaetigen?" selected":"")+'>Ja</option><option value="0"'+(e.auto_bestaetigen?"":" selected")+'>Nein, ich bestätige selbst</option></select><div style="margin-top:12px"><button class="btn" id="se">Speichern</button></div></div>'));
   m.appendChild($('<div class="card"><b>Telegram-Benachrichtigung</b><small class="t">Optional: neue Reservierungen und Bestellungen aufs Handy. Bot bei @BotFather erstellen, Token und deine Chat-ID eintragen.</small><label>Bot-Token</label><input id="tt" placeholder="'+(e.telegramGesetzt?"gespeichert (zum Ändern neu eintragen)":"123456:ABC…")+'"><label>Chat-ID</label><input id="tc" value="'+esc(e.telegramChat)+'"><div style="margin-top:12px"><button class="btn g" id="st">Telegram speichern</button></div></div>'));

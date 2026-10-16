@@ -79,3 +79,14 @@ Lab → Werkstatt → «KI-Schlüssel» (Gemini, Groq, OpenRouter, Mistral, Cohe
 
 ## Restaurant: Tagesangebot (Gericht des Abends)
 Restaurants haben die öffentliche Tabelle `tagesangebot` (Datum, Art, Gericht, Preis, Beschreibung, Allergene); ältere Restaurants bekommen sie beim Laden automatisch. Der Inhaber sagt dem Agenten «Gericht des Abends ist …», er trägt es ein. Gäste-Agent liest «heute»; fehlt der Eintrag, sagt er das ehrlich und empfiehlt aus der Karte. Reservierungen: Kapazität wird geprüft, nie überbucht.
+
+## Abo & Bezahlung (Stripe)
+
+- Jeder neue Betrieb startet mit **14 Tagen Test**. Ältere Betriebe sind «gratis» (nie gesperrt). Status: `test | aktiv | ueberfaellig | gekuendigt | pausiert | gratis`.
+- **Zahlungslink pro Kunde:** `/b/<id>/abo` (Seite mit Knopf → Stripe Checkout, Abo monatlich in CHF, Standard 49, pro Betrieb änderbar oder `ABO_PREIS_CHF` in `.env`). Läuft der Test noch, wird erst nach Testende abgerechnet.
+- **Webhook:** `POST https://<domain>/pay/stripe` (Signatur wird geprüft, 5 Min Toleranz, Doppel-Ereignisse ignoriert). Ereignisse: `checkout.session.completed`, `invoice.paid`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`.
+- **Sperre:** Ohne gültigen Test/Abo antwortet der Gast-Chat mit «nicht erreichbar» (402) und der Besitzer-Chat ist gesperrt. Zahlungsausfall: 3 Tage Kulanz. Kündigung: läuft bis Periodenende.
+- **Schlüssel:** `sk_…`/`rk_…` (STRIPE_SECRET_KEY) und `whsec_…` (STRIPE_WEBHOOK_SECRET) im Tool «KI-Schlüssel» einfügen. Optional `STRIPE_PRICE_ID` für einen festen Stripe-Preis.
+- **Lab → Werkstatt → «Kunden & Abos»:** Übersicht (Test/Aktiv/Gesperrt, Umsatz pro Monat), Zahlungslink kopieren oder per WhatsApp senden, Test verlängern, «von Hand bezahlt» (Rechnung/TWINT), pausieren, gratis (Demo), Preis setzen.
+- **Kunden-Bereich:** Banner bei Testende/Zahlungsproblem, Karte «Abo» unter «Mehr», Stripe-Kundenportal (`/b/<id>/abo/portal?t=…`) zum Ändern/Kündigen.
+- Telegram-Meldungen an dich: Test endet bald, Test abgelaufen, neues Abo, Zahlung eingegangen/fehlgeschlagen, Kündigung.

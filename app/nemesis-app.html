@@ -2902,6 +2902,7 @@ Antworte NUR mit JSON.
 
 const TOOLS = [
   { id: "gastro", n: "Gastro-Agent", d: "KI-Mitarbeiter für Restaurants: kennt Konzept, Karte, Bestand und Reservierungen, empfiehlt Gerichte aus Resten und nimmt Reservierungen an. Dein erstes Verkaufsprodukt.", ic: "❖" },
+  { id: "kunden", n: "Kunden & Abos", d: "Alle Kunden-Betriebe: Test, Zahlung, Sperre. Zahlungslink per WhatsApp schicken, Umsatz sehen. Hier kassierst du.", ic: "💶" },
   { id: "breed", n: "Zuchtkammer", d: "Zwei Agenten zeugen ein Kind mit gemischtem Erbgut und eigener Generation.", ic: "⧗" },
   { id: "portal", n: "Portal-Fork", d: "Klont einen Agenten in eine Parallelversion mit anderer Ausrichtung.", ic: "◉" },
   { id: "meeseeks", n: "Einweg-Agent", d: "Existiert für genau eine Aufgabe, liefert, und ist danach weg.", ic: "◑" },
@@ -2947,7 +2948,7 @@ const TOOLS = [
 function Workshop(ctx) {
   const { tool, setTool } = ctx;
   if (tool) {
-    const T = { gastro: GastroAgent, breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: KundenDossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, schluessel: SchluesselZentrale, telegram: TelegramZentrale, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
+    const T = { kunden: KundenAbos, gastro: GastroAgent, breed: Breed, portal: Portal, meeseeks: Meeseeks, council: Council, micro: Micro, gym: Gym, blitz: Blitz, arena: Arena, fusion: Fusion, seller: Seller, smith: Smith, dream: Dream, forger: Forger, ancestors: Ancestors, reactor: Reactor, hatch: Hatch, ideaforge: IdeaForge, company: Company, hellcustomer: HellCustomer, trilingual: Trilingual, ideareactor: IdeaReactor, academy: Academy, blackbook: BlackBook, diary: Diary, campaign: Campaign, optimizer: Optimizer, dossier: KundenDossier, onboarding: Onboarding, genpool: GenPool, core: Core, starmap: StarMap, collective: Collective, codeforge: CodeForge, schluessel: SchluesselZentrale, telegram: TelegramZentrale, skillgen: SkillGen, promptarch: PromptArchitect, repair: AgentRepair, marketplace: AgentMarketplace, wipe: Wipe }[tool];
     return (<><button className="back" onClick={() => setTool(null)}>← Werkbank</button><T {...ctx} /></>);
   }
   return (
@@ -6450,6 +6451,106 @@ const TGJ_VORLAGEN = [
   { name: "Wochenrueckblick", wann: "woechentlich fr 17:00", aufgabe: "Mach einen kurzen Wochenrueckblick: was lief, was ist offen, was sollte ich naechste Woche anpacken. Nutze meine Notizen und die Betriebsdaten." },
 ];
 const tgZeit = (ms) => { if (!ms) return "–"; const d = new Date(ms); return d.toLocaleString("de-CH", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); };
+
+function KundenAbos() {
+  const [liste, setListe] = useState(null);
+  const [zahl, setZahl] = useState(null);
+  const [err, setErr] = useState("");
+  const [meld, setMeld] = useState("");
+  const [busy, setBusy] = useState("");
+  const [preis, setPreis] = useState({});
+  const [zeigeLink, setZeigeLink] = useState("");
+  const aktiv = useRef(true);
+  useEffect(() => () => { aktiv.current = false; }, []);
+  const laden = async () => {
+    try {
+      const [a, b] = await Promise.all([wApi("/betrieb/liste"), wApi("/betrieb/zahlung")]);
+      if (!aktiv.current) return;
+      setListe(a.betriebe || []); setZahl(b); setErr("");
+    } catch (e) {
+      if (aktiv.current) setErr(e.message === "KEIN_SERVER" ? "Kein Nemesis-Server verbunden (öffne die App über deinen Server-Link)." : e.message === "ALT" ? "Der Server kennt «Abos» noch nicht. Zahnrad → «Server aktualisieren», ca. 5 Minuten warten." : e.message);
+    }
+  };
+  useEffect(() => { laden(); const t = setInterval(laden, 30000); return () => clearInterval(t); }, []);
+  const o = location.origin;
+  const link = (b) => o + "/b/" + b.id + "/abo";
+  const tu = async (name, body) => {
+    setBusy(name + body.aktion); setErr("");
+    try { await wPost("/betrieb/abo", body); await laden(); setMeld("Gespeichert."); setTimeout(() => { if (aktiv.current) setMeld(""); }, 2500); }
+    catch (e) { setErr(e.message); }
+    if (aktiv.current) setBusy("");
+  };
+  const kopiere = (t) => {
+    try { navigator.clipboard.writeText(t).then(() => { setMeld("Link kopiert."); setTimeout(() => { if (aktiv.current) setMeld(""); }, 2500); }).catch(() => setZeigeLink(t)); }
+    catch (e) { setZeigeLink(t); }
+  };
+  const STAT = { test: "🟡 Test", aktiv: "🟢 Aktiv", ueberfaellig: "🟠 Zahlung offen", gekuendigt: "⚪ Gekündigt", pausiert: "🔴 Pausiert", gratis: "🔵 Gratis" };
+  const zeit = (iso) => iso ? new Date(iso).toLocaleDateString("de-CH") : "";
+  const stand = (a) => {
+    if (a.status === "test") return a.ok ? "noch " + a.tage + " Tag(e), bis " + zeit(a.ende) : "Test abgelaufen, Assistent gesperrt";
+    if (a.status === "aktiv") return a.manuell ? "von Hand bezahlt bis " + zeit(a.ende) + (a.ok ? "" : " (abgelaufen, gesperrt)") : "läuft" + (a.ende ? ", nächste Abrechnung ca. " + zeit(a.ende) : "");
+    if (a.status === "ueberfaellig") return a.ok ? "Zahlung fehlgeschlagen, läuft noch bis " + zeit(a.ende) : "Zahlung fehlgeschlagen, gesperrt";
+    if (a.status === "gekuendigt") return a.ok ? "läuft noch bis " + zeit(a.ende) : "beendet, gesperrt";
+    if (a.status === "pausiert") return "gesperrt";
+    return "nie gesperrt";
+  };
+  const L = liste || [];
+  const zaehl = (st) => L.filter((b) => b.abo && b.abo.status === st).length;
+  const mrr = L.reduce((sum, b) => sum + (b.abo && b.abo.status === "aktiv" && b.abo.ok ? b.abo.preis : 0), 0);
+  const nachricht = (b) => "Grüezi\n\n" + (b.abo.status === "test" && b.abo.ok ? "Ihr Test des digitalen Assistenten für " + b.name + " läuft noch " + b.abo.tage + " Tag(e)." : "Der digitale Assistent für " + b.name + " ist bereit.") +
+    "\nHier können Sie das Abo abschliessen (CHF " + b.abo.preis + " pro Monat, jederzeit zum Monatsende kündbar):\n" + link(b) + "\n\nFreundliche Grüsse\nNemesis Studios";
+  return (
+    <>
+      <div className="log">Alle deine Kunden an einem Ort: wer testet, wer zahlt, wer gesperrt ist. Läuft der Test ab oder die Zahlung aus, antwortet der Assistent nicht mehr. Du bekommst eine Telegram-Nachricht, wenn ein Test bald endet oder jemand zahlt.</div>
+      {err && <div className="log err" style={{ marginTop: 10 }}>{err}</div>}
+      {meld && <div className="log done" style={{ marginTop: 10 }}>{meld}</div>}
+      {zeigeLink && <div className="log" style={{ marginTop: 10, userSelect: "all", wordBreak: "break-all" }}>Kopieren blockiert, bitte von Hand kopieren:{"\n"}{zeigeLink}</div>}
+
+      {zahl && !zahl.schluessel && (
+        <>
+          <span className="lbl" style={{ marginTop: 14 }}>Bezahlung einrichten (einmalig, ca. 10 Minuten)</span>
+          <div className="log warn">{"1. stripe.com → Konto anlegen (Land: Schweiz).\n2. Entwickler → API-Schlüssel → «Geheimer Schlüssel» (sk_…) kopieren. Zum Üben zuerst den Testmodus nehmen.\n3. Entwickler → Webhooks → «Endpunkt hinzufügen». URL:\n" + zahl.webhookUrl + "\nEreignisse: checkout.session.completed, invoice.paid, invoice.payment_failed, customer.subscription.updated, customer.subscription.deleted. Danach das «Signing secret» (whsec_…) kopieren.\n4. Einstellungen → Billing → Kundenportal → aktivieren (damit Kunden selbst kündigen können).\n5. Beide Schlüssel (sk_… und whsec_…) im Tool «KI-Schlüssel» in das Textfeld einfügen und speichern."}</div>
+        </>
+      )}
+      {zahl && zahl.schluessel && (
+        <div className={"log " + (zahl.webhook ? "done" : "warn")} style={{ marginTop: 10 }}>
+          {zahl.webhook ? "✅ Stripe verbunden (" + (zahl.modus === "live" ? "Echtbetrieb" : "TESTMODUS: es wird kein echtes Geld bezahlt") + ")" : "⚠️ Stripe-Schlüssel ist da, aber das Webhook-Secret (whsec_…) fehlt noch. Ohne das merkt der Server nicht, wenn jemand bezahlt. Webhook-URL: " + zahl.webhookUrl}
+        </div>
+      )}
+
+      <span className="lbl" style={{ marginTop: 14 }}>Übersicht</span>
+      <div className="log">{"Aktiv (zahlend): " + zaehl("aktiv") + "   Test: " + zaehl("test") + "   Zahlung offen: " + zaehl("ueberfaellig") + "   Gesperrt/pausiert: " + L.filter((b) => b.abo && !b.abo.ok).length + "\nWiederkehrender Umsatz: CHF " + mrr.toFixed(2) + " pro Monat" + (zahl && zahl.festerPreis ? "\n(Hinweis: STRIPE_PRICE_ID ist gesetzt, Stripe nimmt dann dessen Preis.)" : "")}</div>
+
+      {!liste && !err && <div className="log">lädt …</div>}
+      {liste && !L.length && <div className="log">Noch kein Betrieb. Lege bei einem Agenten unter «Kunde ⭐ → Betrieb für diesen Kunden anlegen» einen an. Er startet mit 14 Tagen Test.</div>}
+      {L.map((b) => {
+        const a = b.abo || { status: "gratis", ok: true, preis: 49 };
+        return (
+          <div key={b.id} className="log" style={{ marginTop: 12 }}>
+            <b>{b.name}</b> · {STAT[a.status] || a.status}{"\n"}{stand(a)} · CHF {a.preis} / Monat{b.anfragen ? " · " + b.anfragen + " neue Anfrage(n)" : ""}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+              <button className="btn cy sm" style={{ flex: "1 1 45%" }} onClick={() => kopiere(link(b))}>Zahlungslink kopieren</button>
+              <a className="btn tox sm" style={{ flex: "1 1 45%", textAlign: "center" }} href={"https://wa.me/?text=" + encodeURIComponent(nachricht(b))} target="_blank" rel="noopener">Per WhatsApp</a>
+              <a className="btn ghost sm" style={{ flex: "1 1 45%", textAlign: "center" }} href={o + "/b/" + b.id + "/#t=" + b.token} target="_blank" rel="noopener">Kunden-Bereich</a>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              <button className="btn ghost sm" style={{ flex: "1 1 45%" }} disabled={!!busy} onClick={() => tu(b.id, { id: b.id, aktion: "test", tage: 7 })}>Test +7 Tage</button>
+              <button className="btn ghost sm" style={{ flex: "1 1 45%" }} disabled={!!busy} onClick={() => tu(b.id, { id: b.id, aktion: "manuell", tage: 31 })}>Von Hand bezahlt (+31 Tage)</button>
+              <button className="btn ghost sm" style={{ flex: "1 1 45%" }} disabled={!!busy} onClick={() => tu(b.id, { id: b.id, aktion: "pausieren" })}>Pausieren</button>
+              <button className="btn ghost sm" style={{ flex: "1 1 45%" }} disabled={!!busy} onClick={() => tu(b.id, { id: b.id, aktion: "gratis" })}>Gratis (Demo)</button>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+              <input style={{ width: 110 }} inputMode="decimal" placeholder={"CHF " + a.preis} value={preis[b.id] || ""} onChange={(e) => setPreis({ ...preis, [b.id]: e.target.value })} />
+              <button className="btn ghost sm" disabled={!!busy || !Number(preis[b.id])} onClick={() => tu(b.id, { id: b.id, aktion: "preis", preis: Number(preis[b.id]) }).then(() => setPreis({ ...preis, [b.id]: "" }))}>Preis setzen</button>
+            </div>
+            {b.aboLog && b.aboLog.length > 0 && <div style={{ marginTop: 8, opacity: 0.7, fontSize: 12 }}>{b.aboLog.slice(0, 3).map((x) => zeit(x.zeit) + " " + x.text).join("\n")}</div>}
+          </div>
+        );
+      })}
+      <div className="log" style={{ marginTop: 12, opacity: 0.8 }}>Der Preis gilt für neue Abschlüsse (Zahlungslink). Bei einem laufenden Abo bleibt der alte Preis, bis es neu abgeschlossen wird. Zahlt jemand per Rechnung oder TWINT von Hand, nimm «Von Hand bezahlt».</div>
+    </>
+  );
+}
 
 function SchluesselZentrale() {
   const [text, setText] = useState("");
