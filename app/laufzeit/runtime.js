@@ -104,6 +104,115 @@ function pruefe(entity, body, vorhanden) {
 const hashPw = (pw, salt) => { salt = salt || crypto.randomBytes(16).toString("hex"); return salt + ":" + crypto.scryptSync(String(pw), salt, 32).toString("hex"); };
 const pwOk = (pw, h) => { try { const [s, x] = String(h).split(":"); const y = hashPw(pw, s).split(":")[1]; return crypto.timingSafeEqual(Buffer.from(x, "hex"), Buffer.from(y, "hex")); } catch (e) { return false; } };
 
+/* ---------- Eigene Logik: isolierter Kindprozess ----------
+   Frueher lief logic.js per vm im Server-Prozess. vm ist KEINE Sicherheitsgrenze
+   (Object.constructor("return process")() kam an den echten Prozess). Jetzt:
+   1) eigener Prozess, leere Umgebung, Node-Permission-Model (kein fs, keine Kindprozesse, keine Worker),
+   2) gefaehrliche Prozess-Schnittstellen vor dem Laden geloescht,
+   3) im vm-Kontext gibt es KEINE Host-Objekte (globales Objekt ohne Prototyp, Daten als JSON-Text),
+   4) Schreibzugriffe kommen als Operationen zurueck und werden hier geprueft (pruefe) und angewendet. */
+function logikWorkerMain() {
+  "use strict";
+  const vm = require("vm");
+  const send = process.send ? process.send.bind(process) : null;
+  for (const k of ["require", "module", "exports", "__filename", "__dirname"]) { try { delete globalThis[k]; } catch (e) {} }
+  for (const k of ["binding", "_linkedBinding", "dlopen", "getBuiltinModule", "mainModule", "chdir", "kill", "setuid", "setgid", "_debugProcess"]) { try { process[k] = undefined; } catch (e) {} }
+  const KERN = `
+    var __ops = [], __daten = null, __user = null, __erg = undefined, __fertig = false, __fehler = "";
+    var module = { exports: {} }, exports = module.exports;
+    var console = { log: function () {}, warn: function () {}, error: function () {} };
+    function __tab(p) { if (!__daten.tabellen[p]) { __daten.tabellen[p] = []; } return __daten.tabellen[p]; }
+    function __kopie(x) { return x === undefined ? undefined : JSON.parse(JSON.stringify(x)); }
+    var __db = {
+      list: function (p, f) { return __tab(p).filter(function (r) { return !f || Object.keys(f).every(function (k) { return r[k] === f[k]; }); }).map(__kopie); },
+      get: function (p, id) { var r = __tab(p).find(function (x) { return x.id === Number(id); }); return r ? __kopie(r) : null; },
+      insert: function (p, o) {
+        if (__daten.plurals.indexOf(p) < 0) throw new Error("Unbekannte Tabelle " + p);
+        __daten.zaehler[p] = (__daten.zaehler[p] || 0) + 1;
+        var t = new Date().toISOString(), r = Object.assign({}, __kopie(o || {}), { id: __daten.zaehler[p], created: t, updated: t });
+        if (__daten.owner[p] && __user) r.owner = __user.id;
+        __tab(p).push(r); __ops.push({ op: "insert", plural: p, obj: __kopie(o || {}) }); return __kopie(r);
+      },
+      update: function (p, id, o) { var r = __tab(p).find(function (x) { return x.id === Number(id); }); if (!r) return null; Object.assign(r, __kopie(o || {}), { updated: new Date().toISOString() }); __ops.push({ op: "update", plural: p, id: Number(id), obj: __kopie(o || {}) }); return __kopie(r); },
+      remove: function (p, id) { var t = __tab(p), i = t.findIndex(function (x) { return x.id === Number(id); }); if (i < 0) return false; t.splice(i, 1); __ops.push({ op: "remove", plural: p, id: Number(id) }); return true; }
+    };
+    function __ruf(key, ctxJson, datenJson) {
+      __ops = []; __erg = undefined; __fertig = false; __fehler = "";
+      __daten = JSON.parse(datenJson); var c = JSON.parse(ctxJson); __user = c.user; c.db = __db;
+      var fn = (module.exports.routes || {})[key];
+      try {
+        var w = fn(c);
+        if (w && typeof w.then === "function") w.then(function (v) { __erg = v; __fertig = true; }, function (e) { __fehler = String((e && e.message) || e); __fertig = true; });
+        else { __erg = w; __fertig = true; }
+      } catch (e) { __fehler = String((e && e.message) || e); __fertig = true; }
+    }
+    function __stand() { return JSON.stringify({ fertig: __fertig, fehler: __fehler, wert: __erg === undefined ? null : __erg, leer: __erg === undefined, ops: __ops }); }
+    function __routen() { var r = module.exports.routes || {}; return JSON.stringify(Object.keys(r).filter(function (k) { return typeof r[k] === "function"; }).map(function (k) { return { key: k, oeffentlich: !!r[k].oeffentlich }; })); }
+  `;
+  let ctx = null;
+  function laden(logic) {
+    const g = Object.create(null);
+    ctx = vm.createContext(g, { codeGeneration: { strings: false, wasm: false } });
+    vm.runInContext(KERN, ctx, { timeout: 1000 });
+    vm.runInContext(String(logic), ctx, { timeout: 1000, filename: "logic.js" });
+    return JSON.parse(vm.runInContext("__routen()", ctx, { timeout: 500 }));
+  }
+  async function rufe(m) {
+    vm.runInContext("__ruf(" + JSON.stringify(m.key) + "," + JSON.stringify(JSON.stringify(m.ctx)) + "," + JSON.stringify(JSON.stringify(m.daten)) + ")", ctx, { timeout: 1500 });
+    const bis = Date.now() + 3000;
+    for (;;) {
+      const s = JSON.parse(vm.runInContext("__stand()", ctx, { timeout: 500 }));
+      if (s.fertig) return s;
+      if (Date.now() > bis) return { fertig: true, fehler: "Zeitueberschreitung", ops: [] };
+      await new Promise((r) => setTimeout(r, 2));
+    }
+  }
+  if (process.argv.includes("--analyse")) {
+    let roh = ""; process.stdin.on("data", (c) => (roh += c));
+    process.stdin.on("end", () => {
+      try { process.stdout.write(JSON.stringify({ ok: true, routen: laden(JSON.parse(roh).logic) })); }
+      catch (e) { process.stdout.write(JSON.stringify({ ok: false, fehler: String(e.message || e).slice(0, 300) })); }
+    });
+    return;
+  }
+  process.on("message", async (m) => {
+    try {
+      if (m.t === "laden") { laden(m.logic); return send({ id: m.id, ok: true }); }
+      if (m.t === "ruf") { const s = await rufe(m); return send({ id: m.id, ok: !s.fehler, fehler: s.fehler, wert: s.wert, leer: s.leer, ops: s.ops || [] }); }
+    } catch (e) { send({ id: m.id, ok: false, fehler: String(e.message || e).slice(0, 300), ops: [] }); }
+  });
+}
+function workerArgs(extra) {
+  const f = process.allowedNodeEnvironmentFlags;
+  const perm = f.has("--permission") ? ["--permission"] : f.has("--experimental-permission") ? ["--experimental-permission"] : [];
+  return perm.concat(["--max-old-space-size=96", "-e", "(" + logikWorkerMain.toString() + ")()", "--"]).concat(extra || []);
+}
+function logikAnalyse(logic) {
+  const r = require("child_process").spawnSync(process.execPath, workerArgs(["--analyse"]), { input: JSON.stringify({ logic: String(logic) }), env: {}, timeout: 8000, maxBuffer: 1 << 20 });
+  try { return JSON.parse(String(r.stdout || "")); } catch (e) { return { ok: false, fehler: "Logik-Pruefung fehlgeschlagen" + (r.error ? ": " + r.error.message : "") }; }
+}
+function logikProzess(logic) {
+  let kind = null, n = 0, warte = new Map(), kette = Promise.resolve();
+  const start = () => {
+    kind = require("child_process").spawn(process.execPath, workerArgs([]), { env: {}, stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    kind.on("message", (m) => { const w = warte.get(m.id); if (w) { warte.delete(m.id); w(m); } });
+    kind.on("exit", () => { for (const w of warte.values()) w({ ok: false, fehler: "Logik-Prozess beendet", ops: [] }); warte.clear(); kind = null; });
+    kind.send({ t: "laden", id: ++n, logic: String(logic) });
+  };
+  const frage = (m) => new Promise((ok) => {
+    if (!kind) start();
+    const id = ++n; m.id = id;
+    const t = setTimeout(() => { if (warte.has(id)) { warte.delete(id); try { kind && kind.kill("SIGKILL"); } catch (e) {} ok({ ok: false, fehler: "Zeitueberschreitung", ops: [] }); } }, 5000);
+    warte.set(id, (x) => { clearTimeout(t); ok(x); });
+    kind.send(m);
+  });
+  return {
+    // nacheinander, damit Zaehler und Daten konsistent bleiben
+    ruf: (m) => { const p = kette.then(() => frage(m)); kette = p.catch(() => {}); return p; },
+    stop: () => { try { kind && kind.kill("SIGKILL"); } catch (e) {} },
+  };
+}
+
 /* ---------- Die App ---------- */
 function createApp(opt) {
   const spec = normSpec(opt.spec);
@@ -122,41 +231,39 @@ function createApp(opt) {
   };
   setInterval(() => { const n = Date.now(); for (const [k, v] of bremse) if (!v.some((t) => n - t < 600000)) bremse.delete(k); }, 300000).unref();
 
-  /* eigene Logik in einer Sandbox (vm): nur db-Zugriff, kein require/fs/Netz */
+  /* eigene Logik: isolierter Kindprozess (siehe logikWorkerMain) */
   const routen = [];
-  let logikFehler = "";
+  let logikFehler = "", logik = null;
   if (opt.logic && String(opt.logic).trim()) {
-    try {
-      const mod = { exports: {} };
-      const sandbox = { module: mod, exports: mod.exports, console: { log() {}, warn() {}, error() {} }, Math, Date, JSON, Number, String, Array, Object, Boolean, parseInt, parseFloat, isNaN, isFinite, RegExp, Map, Set, Intl };
-      vm.createContext(sandbox);
-      vm.runInContext(String(opt.logic), sandbox, { timeout: 1000, filename: "logic.js" });
-      const r = (mod.exports && mod.exports.routes) || {};
-      for (const k of Object.keys(r)) {
-        const m = k.match(/^(GET|POST|PUT|DELETE)\s+(\/api\/[A-Za-z0-9_\-\/:]+)$/);
-        if (!m || typeof r[k] !== "function") continue;
-        routen.push({ methode: m[1], teile: m[2].split("/").filter(Boolean), fn: r[k], sandbox });
+    const an = logikAnalyse(opt.logic);
+    if (!an.ok) logikFehler = an.fehler || "Logik laedt nicht";
+    else {
+      for (const r of an.routen || []) {
+        const m = String(r.key).match(/^(GET|POST|PUT|DELETE)\s+(\/api\/[A-Za-z0-9_\-\/:]+)$/);
+        if (m) routen.push({ key: r.key, methode: m[1], teile: m[2].split("/").filter(Boolean), oeffentlich: !!r.oeffentlich });
       }
-    } catch (e) { logikFehler = e.message; }
+      logik = logikProzess(opt.logic);
+    }
   }
+  // Operationen aus dem Logik-Prozess pruefen und anwenden (alles oder nichts)
+  const opsAnwenden = (ops, user) => {
+    const plan = [];
+    for (const o of Array.isArray(ops) ? ops.slice(0, 500) : []) {
+      const e = ents[o.plural]; if (!e) throw new Error("Unbekannte Tabelle " + o.plural);
+      if (o.op === "insert") { const { out, fehler } = pruefe(e, o.obj || {}, false); if (fehler.length) throw new Error(fehler.join(", ")); plan.push({ o, e, out }); }
+      else if (o.op === "update") { const { out, fehler } = pruefe(e, o.obj || {}, true); if (fehler.length) throw new Error(fehler.join(", ")); plan.push({ o, e, out }); }
+      else if (o.op === "remove") plan.push({ o, e });
+    }
+    for (const { o, e, out } of plan) {
+      const t = tabelle(e.plural);
+      if (o.op === "insert") { const r = Object.assign({ id: ++db.zaehler[e.plural], created: new Date().toISOString(), updated: new Date().toISOString() }, out); if (e.owner && user) r.owner = user.id; t.push(r); }
+      else if (o.op === "update") { const r = t.find((x) => x.id === Number(o.id)); if (r) Object.assign(r, out, { updated: new Date().toISOString() }); }
+      else { const i = t.findIndex((x) => x.id === Number(o.id)); if (i >= 0) t.splice(i, 1); }
+    }
+    if (plan.length) st.sichern();
+  };
   const tabelle = (plural) => db.tabellen[plural] || (db.tabellen[plural] = []);
-  const dbApi = (user) => ({
-    list: (plural, filter) => tabelle(plural).filter((r) => !filter || Object.keys(filter).every((k) => r[k] === filter[k])).map((r) => JSON.parse(JSON.stringify(r))),
-    get: (plural, id) => { const r = tabelle(plural).find((x) => x.id === Number(id)); return r ? JSON.parse(JSON.stringify(r)) : null; },
-    insert: (plural, obj) => {
-      const e = ents[plural]; if (!e) throw new Error("Unbekannte Tabelle " + plural);
-      const { out, fehler } = pruefe(e, obj || {}, false); if (fehler.length) throw new Error(fehler.join(", "));
-      const r = Object.assign({ id: ++db.zaehler[plural], created: new Date().toISOString(), updated: new Date().toISOString() }, out);
-      if (e.owner && user) r.owner = user.id;
-      tabelle(plural).push(r); st.sichern(); return JSON.parse(JSON.stringify(r));
-    },
-    update: (plural, id, obj) => {
-      const e = ents[plural]; const r = tabelle(plural).find((x) => x.id === Number(id)); if (!e || !r) return null;
-      const { out, fehler } = pruefe(e, obj || {}, true); if (fehler.length) throw new Error(fehler.join(", "));
-      Object.assign(r, out, { updated: new Date().toISOString() }); st.sichern(); return JSON.parse(JSON.stringify(r));
-    },
-    remove: (plural, id) => { const t = tabelle(plural), i = t.findIndex((x) => x.id === Number(id)); if (i < 0) return false; t.splice(i, 1); st.sichern(); return true; },
-  });
+
 
   const sende = (res, code, obj, extra) => {
     const b = JSON.stringify(obj);
@@ -232,16 +339,14 @@ function createApp(opt) {
       const params = {}; let passt = true;
       r.teile.forEach((t, i) => { if (t.startsWith(":")) params[t.slice(1)] = decodeURIComponent(teile[i]); else if (t !== teile[i]) passt = false; });
       if (!passt) continue;
-      if (spec.auth && !user && !(r.fn.oeffentlich)) return sende(res, 401, { error: "Bitte anmelden" });
+      if (spec.auth && !user && !r.oeffentlich) return sende(res, 401, { error: "Bitte anmelden" });
       const body = M === "GET" || M === "DELETE" ? {} : await lies(req);
       const query = Object.fromEntries(url.searchParams);
-      r.sandbox.__ctx = { body, query, params, user: oeff(user), db: dbApi(user) };
-      r.sandbox.__fn = r.fn;
-      try {
-        const erg = vm.runInContext("__fn(__ctx)", r.sandbox, { timeout: 1500 });
-        const wert = erg && typeof erg.then === "function" ? await Promise.race([erg, new Promise((_, no) => setTimeout(() => no(new Error("Zeitueberschreitung")), 3000))]) : erg;
-        return sende(res, 200, wert === undefined ? { ok: true } : wert);
-      } catch (e) { return sende(res, 400, { error: String(e.message || e).slice(0, 300) }); }
+      const daten = { tabellen: db.tabellen, zaehler: db.zaehler, plurals: Object.keys(ents), owner: Object.fromEntries(spec.entities.map((x) => [x.plural, !!x.owner])) };
+      const a = await logik.ruf({ t: "ruf", key: r.key, ctx: { body, query, params, user: oeff(user) }, daten });
+      if (!a.ok) return sende(res, 400, { error: String(a.fehler || "Fehler").slice(0, 300) });
+      try { opsAnwenden(a.ops, user); } catch (x) { return sende(res, 400, { error: String(x.message).slice(0, 300) }); }
+      return sende(res, 200, a.leer ? { ok: true } : a.wert);
     }
 
     const e = ents[teile[1]];
@@ -325,7 +430,7 @@ function createApp(opt) {
       sende(res, e.code === 413 || e.code === 400 ? e.code : 500, { error: e.code ? e.message : "Serverfehler" });
     }
   }
-  return { handler, spec, logikFehler, stop: () => st.jetzt(), db };
+  return { handler, spec, logikFehler, stop: () => { st.jetzt(); if (logik) logik.stop(); }, db };
 }
 
 /* ---------- Standalone ---------- */
