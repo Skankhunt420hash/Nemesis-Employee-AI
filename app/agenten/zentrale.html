@@ -468,8 +468,21 @@ SEITE.mandanten = async () => {
     <label class="f">Agenten-Team</label><div class="wahl" id="nmVorlagen">${S.katalog.vorlagen.map((v) => `<button data-nmv="${v}" class="${v === "office" ? "an" : ""}">${esc(v)}</button>`).join("")}</div>
     <label class="f">Start</label><select class="e" id="nmDemo"><option value="1">Demo-Modus mit künstlichen Beispieldaten</option><option value="0">Echter Betrieb (leer)</option></select>
     <button class="knopf pri" style="margin-top:14px;width:100%" data-mneu>Kunde anlegen</button>
-    <div class="mut klein" style="margin-top:8px">Der Kunde bekommt einen eigenen Zugang (Token) für die Zentrale. Das Token wird nur einmal angezeigt.</div></div></div>`;
+    <div class="mut klein" style="margin-top:8px">Der Kunde bekommt einen eigenen Zugang (Token) für die Zentrale. Das Token wird nur einmal angezeigt.</div></div></div>
+  ${await openclawKarte()}`;
 };
+
+async function openclawKarte() {
+  const o = (await api("/openclaw")).openclaw;
+  return `<div class="karte" style="margin-top:14px"><h3>OpenClaw-Gateway (Browser & Computer) ${o.url ? (o.live ? '<span class="chip ok">erreichbar</span>' : '<span class="chip err">nicht erreichbar</span>') + (o.bereit ? ' <span class="chip ok">bereit</span>' : "") : '<span class="chip">nicht eingerichtet</span>'}</h3>
+    <div class="hinweis">Das Gateway-Token ist ein Betreiber-Schlüssel mit vollen Rechten. Gateway nur auf 127.0.0.1 oder privatem Netz betreiben. NEMESIS prüft eigene Rechte vor jedem Aufruf, die OpenClaw-Policy greift zusätzlich.</div>
+    <div class="raster r3"><div><label class="f">Gateway-URL</label><input class="e" id="ocUrl" value="${esc(o.url)}" placeholder="http://127.0.0.1:18789"></div>
+    <div><label class="f">Token ${o.tokenGesetzt ? '<span class="chip ok">gespeichert</span>' : ""}</label><input class="e" id="ocTok" type="password" autocomplete="new-password" placeholder="${o.tokenGesetzt ? "unverändert lassen" : "OPENCLAW_GATEWAY_TOKEN"}"></div>
+    <div><label class="f">Agent für Aufträge (Computer)</label><input class="e" id="ocAgent" value="${esc(o.agentId)}" placeholder="z.B. desktop (leer = aus)"></div></div>
+    <label class="f">Freigeschaltete Kunden</label><div class="wahl" id="ocMand">${S.mandanten.map((m) => `<button data-ocm="${m.id}" class="${o.mandanten.includes(m.id) ? "an" : ""}">${esc(m.name)}</button>`).join("") || '<span class="mut">keine</span>'}</div>
+    <div class="zeile" style="margin-top:12px"><label class="zeile klein"><input type="checkbox" id="ocAktiv" ${o.aktiv ? "checked" : ""}> aktiv</label><label class="zeile klein"><input type="checkbox" id="ocProfil" ${o.profilJeMandant ? "checked" : ""}> eigenes Browser-Profil je Kunde (nemesis-&lt;kunde&gt;, muss im Gateway angelegt sein)</label>
+    <button class="knopf pri" data-ocspeichern style="margin-left:auto">Speichern & prüfen</button></div></div>`;
+}
 
 /* ================= Dialoge ================= */
 function modal(html) { const d = document.createElement("div"); d.className = "modal"; d.innerHTML = `<div class="in">${html}</div>`; d.addEventListener("click", (e) => { if (e.target === d || e.target.closest("[data-zu]")) d.remove(); }); document.body.appendChild(d); return d; }
@@ -528,7 +541,8 @@ function binde() {
       if (d.politik) { const m = S.daten.uebersicht.mandant; const p = d.politik === "demo" ? { demo: !m.politik.demo } : { externAutonom: !m.politik.externAutonom }; if (d.politik === "extern" && !m.politik.externAutonom && !confirm("Wirklich erlauben, dass Agenten ohne Freigabe nach aussen handeln?")) return; await mApi("/einstellungen", { politik: p }); await laden(); return zeichne(); }
       if ("smtp" in d) { await mApi("/smtp", { smtp: { host: $("#smHost").value, port: +$("#smPort").value, benutzer: $("#smUser").value, passwort: $("#smPw").value || undefined, von: $("#smVon").value, vonName: $("#smName").value } }); toast("SMTP gespeichert"); await laden(); return zeichne(); }
       if ("limitsspeichern" in d) { const l = {}; document.querySelectorAll("[data-mlimit]").forEach((i) => l[i.dataset.mlimit] = +i.value); await mApi("/einstellungen", { limits: l }); toast("Limits gespeichert"); return zeichne(); }
-      if (d.nmv) { t.classList.toggle("an"); return; }
+      if (d.nmv || d.ocm) { t.classList.toggle("an"); return; }
+      if ("ocspeichern" in d) { const r = await api("/openclaw", { url: $("#ocUrl").value.trim(), token: $("#ocTok").value || undefined, agentId: $("#ocAgent").value.trim(), aktiv: $("#ocAktiv").checked, profilJeMandant: $("#ocProfil").checked, mandanten: [...document.querySelectorAll("#ocMand .an")].map((b) => b.dataset.ocm) }); toast("OpenClaw gespeichert"); return zeichne(); }
       if ("mneu" in d) {
         const r = await api("/mandanten", { name: $("#nmName").value, branche: $("#nmBranche").value, kontakt: $("#nmKontakt").value, demo: $("#nmDemo").value === "1", agenten: [...document.querySelectorAll("#nmVorlagen .an")].map((b) => b.dataset.nmv) });
         S.tid = r.mandant.id; merkeUi(); await laden();

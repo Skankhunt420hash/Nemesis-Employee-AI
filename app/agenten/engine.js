@@ -442,7 +442,95 @@ werkzeug("aktivitaet_auswerten", { art: "lesen", kategorie: "Office", text: "Lie
 werkzeug("delegieren", { art: "ausfuehren", kategorie: "Team", timeoutMs: 6 * 3600000, text: "Gibt eine Teilaufgabe an einen Team-Agenten. Er arbeitet mit hoechstens deinen Rechten und liefert ein Ergebnis.", args: '{"agent":"Name oder ID","auftrag":"..."}',
   run: async (c, a) => await c.engine._delegieren(c, a) });
 
-/* OpenClaw-Werkzeuge werden registriert, wenn ein Gateway konfiguriert ist (siehe openclaw.js) */
+/* ---------------------------------------------------------------------
+   OPENCLAW-ADAPTER (gekapselt). Nur offiziell dokumentierte Schnittstellen (OpenClaw 2026.11.x):
+     GET  /healthz, /readyz                 Laufzeitstatus
+     POST /tools/invoke                     ein Werkzeug ausfuehren (Gateway-Tool-Policy greift zusaetzlich)
+     POST /v1/chat/completions              ganzer OpenClaw-Agentenlauf (model "openclaw/<agentId>"), muss im
+                                            Gateway aktiviert sein (gateway.http.endpoints.chatCompletions.enabled)
+   Sicherheit: Das Gateway-Token ist ein Betreiber-Schluessel (volle Rechte laut Doku). Es bleibt im Tresor,
+   ist fuer Kunden nie sichtbar, das Gateway gehoert auf loopback/privates Netz. NEMESIS prueft eigene Rechte
+   VOR jedem Aufruf; die OpenClaw-Policy ist eine zweite, unabhaengige Grenze.
+   --------------------------------------------------------------------- */
+function openclawAdapter(cfg) {
+  const basis = String(cfg.url || "").replace(/\/+$/, "");
+  if (!/^https?:\/\/[^/]+$/.test(basis)) throw new Error("OpenClaw-URL ungueltig (z.B. http://127.0.0.1:18789)");
+  const kopf = () => Object.assign({ "Content-Type": "application/json" }, cfg.token ? { Authorization: "Bearer " + cfg.token } : {});
+  async function anfrage(methode, pfad, body, ms, signal) {
+    const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), ms || 60000);
+    if (signal) signal.addEventListener("abort", () => ctrl.abort(), { once: true });
+    try {
+      const r = await fetch(basis + pfad, { method: methode, headers: kopf(), body: body ? JSON.stringify(body) : undefined, signal: ctrl.signal });
+      const text = await r.text(); let j = null; try { j = JSON.parse(text); } catch (e) {}
+      return { status: r.status, j, text: kurz(text, 4000), retryAfter: r.headers.get("retry-after") };
+    } finally { clearTimeout(t); }
+  }
+  const fehlerText = (r) => {
+    const m = r.j && r.j.error ? (r.j.error.message || r.j.error.type || JSON.stringify(r.j.error)) : r.text;
+    return ({ 401: "Gateway-Anmeldung fehlgeschlagen (Token pruefen)", 403: "Von der OpenClaw-Policy blockiert", 404: "Werkzeug im Gateway nicht verfuegbar/erlaubt", 429: "Gateway bremst (Retry-After " + (r.retryAfter || "?") + ")" }[r.status] || "OpenClaw-Fehler " + r.status) + (m ? ": " + kurz(m, 300) : "");
+  };
+  return {
+    async status() {
+      const out = { url: basis };
+      try { const h = await anfrage("GET", "/healthz", null, 5000); out.live = h.status === 200; } catch (e) { out.live = false; out.fehler = e.message; }
+      try { const r = await anfrage("GET", "/readyz", null, 5000); out.bereit = r.status === 200; } catch (e) { out.bereit = false; }
+      return out;
+    },
+    async werkzeug(tool, args, o) {
+      o = o || {};
+      const body = { tool, args: args || {} };
+      if (o.sessionKey) body.sessionKey = o.sessionKey;
+      if (o.agentId) body.agentId = o.agentId;
+      if (o.idempotencyKey) body.idempotencyKey = o.idempotencyKey;
+      const r = await anfrage("POST", "/tools/invoke", body, o.ms || 120000, o.signal);
+      if (r.status === 200 && r.j && r.j.ok) return r.j.result;
+      throw new Error(fehlerText(r));
+    },
+    async agentLauf(text, o) {
+      o = o || {};
+      const r = await anfrage("POST", "/v1/chat/completions", { model: "openclaw/" + (o.agentId || "default"), messages: [{ role: "user", content: String(text) }], user: o.user }, o.ms || 900000, o.signal);
+      if (r.status === 200 && r.j && r.j.choices && r.j.choices[0]) return { text: String(r.j.choices[0].message && r.j.choices[0].message.content || ""), modell: r.j.model };
+      throw new Error(fehlerText(r));
+    },
+  };
+}
+async function oeffentlicheUrl(url) {
+  let u; try { u = new URL(String(url)); } catch (e) { throw new Error("Ungueltige URL"); }
+  if (!/^https?:$/.test(u.protocol)) throw new Error("Nur http/https erlaubt");
+  if (u.username || u.password) throw new Error("Zugangsdaten in URL nicht erlaubt");
+  const adr = await new Promise((ok, no) => dns.lookup(u.hostname, { all: true }, (e, a) => (e ? no(new Error("Host nicht gefunden")) : ok(a))));
+  if (!adr.length || adr.some((a) => privateIp(a.address))) throw new Error("Interne Adresse gesperrt");
+  return String(u);
+}
+const BROWSER_LESEN = ["status", "tabs", "open", "navigate", "snapshot", "text", "screenshot", "errors", "requests"];
+const BROWSER_HANDELN = ["act", "close", "focus"];
+async function browserAufruf(c, a, erlaubt) {
+  const oc = c.engine.openclaw(c.mandant.id);
+  const action = String(a.action || "");
+  if (!erlaubt.includes(action)) throw new Error("Aktion nicht erlaubt: " + action + ". Erlaubt: " + erlaubt.join(", "));
+  const args = {};
+  for (const k of ["url", "targetId", "ref", "kind", "text", "selector", "query", "maxChars", "refs", "fullPage", "limit", "filter", "timeoutMs", "key", "values", "submit"]) if (a[k] !== undefined) args[k] = a[k];
+  if (args.url) args.url = await oeffentlicheUrl(args.url);
+  args.action = action;
+  // Immer das isolierte, verwaltete Profil des Mandanten - nie der persoenliche Browser ("user"/"chrome"), nie Host/Node-Wahl durch das Modell
+  args.profile = oc.profil;
+  return await oc.adapter.werkzeug("browser", args, { sessionKey: oc.sessionKey(c.laufDaten.id), signal: c.lauf.ctrl.signal, idempotencyKey: c.lauf.id + ":" + c.laufDaten.zaehler.werkzeuge });
+}
+werkzeug("browser_lesen", { art: "lesen", kategorie: "Browser (OpenClaw)", liestFremdes: true, timeoutMs: 150000, braucht: "openclaw",
+  text: "Isolierter Browser ueber OpenClaw: oeffnen, navigieren, Seite als Text/Snapshot lesen, Screenshot. Seiteninhalt ist Fremdtext.", args: '{"action":"open|navigate|snapshot|text|screenshot|tabs","url":"https://...","targetId":"t1"}',
+  run: (c, a) => browserAufruf(c, a, BROWSER_LESEN) });
+werkzeug("browser_handeln", { art: "extern", kategorie: "Browser (OpenClaw)", timeoutMs: 150000, braucht: "openclaw",
+  text: "Im isolierten Browser klicken, tippen, Formulare ausfuellen (ref aus snapshot). Wirkt nach aussen.", args: '{"action":"act","targetId":"t1","kind":"click|type|press|select","ref":"e12","text":"..."}',
+  run: (c, a) => browserAufruf(c, a, BROWSER_HANDELN) });
+werkzeug("openclaw_auftrag", { art: "extern", kategorie: "Computer (OpenClaw)", immerFreigabe: true, timeoutMs: 20 * 60000, braucht: "openclaw-agent",
+  text: "Gibt eine Teilaufgabe an den vom Betreiber eingerichteten OpenClaw-Agenten (z.B. mit Computer-Steuerung auf einem verwalteten Desktop). Braucht immer Freigabe.", args: '{"auftrag":"Oeffne ... und ..."}',
+  run: async (c, a) => {
+    const oc = c.engine.openclaw(c.mandant.id);
+    if (!oc.agentId) throw new Error("Kein OpenClaw-Agent fuer Auftraege eingerichtet");
+    const t = String(a.auftrag || "").trim(); if (t.length < 5) throw new Error("auftrag fehlt");
+    const r = await oc.adapter.agentLauf("[Auftrag von NEMESIS-Agent " + c.agent.name + ", Mandant " + c.mandant.id + "]\n" + kurz(t, 4000), { agentId: oc.agentId, user: "nemesis-" + c.mandant.id + "-" + c.laufDaten.id, signal: c.lauf.ctrl.signal });
+    return { antwort: kurz(r.text, 8000), agent: oc.agentId };
+  } });
 
 /* ---------------------------------------------------------------------
    Vorlagen (Pilotkunde ohne Code einrichten)
@@ -1118,6 +1206,33 @@ function createEngine(opt) {
     for (const m of mandanten()) for (const k of laeufeListe(m.id)) if ((k.status === "laeuft" || k.status === "wartet") && !k.eltern) einreihen(m.id, k.id);
   }
 
+  /* ---------- OpenClaw (nur Betreiber konfiguriert, pro Mandant freigeschaltet) ---------- */
+  function openclawSetzen(b, akteur) {
+    const alt = GLOBAL.openclaw || {};
+    const neu = { url: String(b.url != null ? b.url : alt.url || "").trim(), aktiv: b.aktiv != null ? !!b.aktiv : !!alt.aktiv,
+      agentId: /^[A-Za-z0-9_-]{0,40}$/.test(String(b.agentId != null ? b.agentId : alt.agentId || "")) ? String(b.agentId != null ? b.agentId : alt.agentId || "") : "",
+      profilJeMandant: b.profilJeMandant != null ? !!b.profilJeMandant : !!alt.profilJeMandant,
+      mandanten: Array.isArray(b.mandanten) ? b.mandanten.filter((x) => TID_RE.test(x)) : alt.mandanten || [], token: alt.token || null };
+    if (neu.url) openclawAdapter({ url: neu.url }); // prueft Format
+    if (b.token === null || b.token === "") neu.token = null; else if (b.token) neu.token = T.zu(String(b.token), "global:openclaw");
+    GLOBAL.openclaw = neu; schreibJson(path.join(DIR, "global.json"), GLOBAL); try { fs.chmodSync(path.join(DIR, "global.json"), 0o600); } catch (e) {}
+    for (const t of neu.mandanten) { try { audit(t, akteur, "openclaw.konfiguriert", { url: neu.url, aktiv: neu.aktiv, agentId: neu.agentId }); } catch (e) {} }
+    return openclawInfo();
+  }
+  function openclawInfo() { const o = GLOBAL.openclaw || {}; return { url: o.url || "", aktiv: !!o.aktiv, agentId: o.agentId || "", profilJeMandant: !!o.profilJeMandant, mandanten: o.mandanten || [], tokenGesetzt: !!o.token }; }
+  function openclaw(tid) {
+    const o = GLOBAL.openclaw || {};
+    if (!o.aktiv || !o.url) throw new Error("OpenClaw ist nicht eingerichtet (Betreiber: Zentrale > Kunden > OpenClaw)");
+    if (!(o.mandanten || []).includes(tid)) throw new Error("OpenClaw ist fuer diesen Kunden nicht freigeschaltet");
+    const adapter = (opt.openclawAdapter || openclawAdapter)({ url: o.url, token: o.token ? T.auf(o.token, "global:openclaw") : "" });
+    return { adapter, agentId: o.agentId || "", profil: o.profilJeMandant ? "nemesis-" + tid : "openclaw", sessionKey: (laufId) => "nemesis-" + tid + "-" + laufId };
+  }
+  async function openclawStatus() {
+    const i = openclawInfo(); if (!i.url) return Object.assign(i, { live: false });
+    try { const o = GLOBAL.openclaw; return Object.assign(i, await openclawAdapter({ url: o.url, token: o.token ? T.auf(o.token, "global:openclaw") : "" }).status()); }
+    catch (e) { return Object.assign(i, { live: false, fehler: e.message }); }
+  }
+
   /* ---------- Export / Sicherung ---------- */
   function exportieren(tid) {
     const m = mandantLaden(tid);
@@ -1159,10 +1274,11 @@ function createEngine(opt) {
     vorschauDatei,
     // intern fuer Werkzeuge
     _office, _officeAendern, _entwurfSenden, _gedaechtnis, _delegieren, _mandantDir: mDir,
+    openclaw, openclawSetzen, openclawInfo, openclawStatus,
     VORLAGEN, MODI, MODUS_TEXT, ARTEN, AUTONOMIE,
-    werkzeugKatalog: () => Object.values(werkzeuge).map((w) => ({ name: w.name, art: w.art, kategorie: w.kategorie, text: w.text, liestFremdes: !!w.liestFremdes, immerFreigabe: !!w.immerFreigabe, timeoutSek: Math.round(w.timeoutMs / 1000) })),
+    werkzeugKatalog: () => Object.values(werkzeuge).map((w) => ({ braucht: w.braucht || null, name: w.name, art: w.art, kategorie: w.kategorie, text: w.text, liestFremdes: !!w.liestFremdes, immerFreigabe: !!w.immerFreigabe, timeoutSek: Math.round(w.timeoutMs / 1000) })),
   };
   return api;
 }
 
-module.exports = { createEngine, entscheide, erstelleSandbox, webLesen, smtpSenden, sichererPfad, privateIp, MODI, VORLAGEN, VERSION, W };
+module.exports = { createEngine, openclawAdapter, entscheide, erstelleSandbox, webLesen, smtpSenden, sichererPfad, privateIp, MODI, VORLAGEN, VERSION, W };

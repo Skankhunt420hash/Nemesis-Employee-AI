@@ -88,10 +88,15 @@ function createHttp(engine, opt) {
     const M = req.method, POST = M === "POST", r = p.slice("/zentrale/api".length);
     try {
       // ----- global -----
-      if (r === "/ich" && !POST) return sende(res, 200, { rolle: w.rolle, mandant: w.tid || null, notaus: engine.notausAn, sandbox: engine.sandbox.info(), version: engine.VERSION, openclaw: opt.openclawStatus ? await opt.openclawStatus() : null }), true;
+      if (r === "/ich" && !POST) return sende(res, 200, { rolle: w.rolle, mandant: w.tid || null, notaus: engine.notausAn, sandbox: engine.sandbox.info(), version: engine.VERSION, openclaw: w.rolle === "admin" ? engine.openclawInfo() : { verfuegbar: (engine.openclawInfo().mandanten || []).includes(w.tid) && engine.openclawInfo().aktiv } }), true;
       if (r === "/katalog" && !POST) return sende(res, 200, { werkzeuge: engine.werkzeugKatalog(), modi: engine.MODI.map((m) => ({ id: m, text: engine.MODUS_TEXT[m] })), autonomie: engine.AUTONOMIE, vorlagen: Object.keys(engine.VORLAGEN), vorlagenDaten: engine.VORLAGEN, modelle: opt.modelle ? opt.modelle() : ["auto"] }), true;
       if (r === "/mandanten" && !POST) { if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true; return sende(res, 200, { mandanten: engine.mandanten().map((m) => Object.assign(m, { offeneFreigaben: engine.freigabenListe(m.id).length, aktiv: engine.laeufeListe(m.id).filter((l) => ["laeuft", "wartet"].includes(l.status)).length })) }), true; }
       if (r === "/mandanten" && POST) { if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true; return sende(res, 200, engine.mandantNeu(await lies(req), "admin")), true; }
+      if (r === "/openclaw") {
+        if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true;
+        if (POST) return sende(res, 200, { openclaw: engine.openclawSetzen(await lies(req), "admin") }), true;
+        return sende(res, 200, { openclaw: await engine.openclawStatus() }), true;
+      }
       if (r === "/notaus" && POST) { if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true; const b = await lies(req); return sende(res, 200, engine.notaus(b.an !== false, "admin")), true; }
 
       // ----- pro Mandant: /m/<tid>/... -----
