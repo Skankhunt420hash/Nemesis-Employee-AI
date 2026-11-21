@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#06060B">
+<title>Nemesis Zentrale</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%2306060B'/%3E%3Cpath d='M32 10 L54 32 L32 54 L10 32 Z' fill='none' stroke='%23FF2D78' stroke-width='5'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#06060B;--bg2:#0B0B14;--karte:#10101C;--karte2:#151526;--linie:#23233A;--linie2:#2E2E4A;
+  --text:#EDEDF5;--text2:#A3A3BE;--text3:#6E6E8C;
+  --pink:#FF2D78;--cyan:#22E0FF;--gelb:#FFD23F;--gruen:#3DDC97;--rot:#FF5C5C;--lila:#A78BFA;
+  --r:12px;--schatten:0 10px 30px rgba(0,0,0,.45);
+  --mono:'JetBrains Mono',ui-monospace,monospace;--sans:'Space Grotesk',system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:var(--cyan)}
+button,input,select,textarea{font:inherit;color:inherit}
+.app{display:grid;grid-template-columns:248px 1fr;min-height:100vh}
+nav.seite{background:linear-gradient(180deg,#0A0A13,#07070D);border-right:1px solid var(--linie);padding:20px 14px;position:sticky;top:0;height:100vh;overflow:auto;display:flex;flex-direction:column;gap:4px}
+.marke{display:flex;align-items:center;gap:10px;padding:4px 10px 18px;font-weight:700;letter-spacing:.5px}
+.marke svg{flex:none}.marke small{display:block;font-family:var(--mono);font-size:10.5px;color:var(--text3);letter-spacing:2px;font-weight:400}
+nav.seite button{all:unset;cursor:pointer;display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:9px;color:var(--text2);font-weight:500}
+nav.seite button:hover{background:var(--karte);color:var(--text)}
+nav.seite button.an{background:linear-gradient(90deg,rgba(255,45,120,.16),rgba(255,45,120,.02));color:var(--text);box-shadow:inset 2px 0 0 var(--pink)}
+nav.seite .ic{width:20px;text-align:center;opacity:.9}
+nav.seite .zahl{margin-left:auto;background:var(--pink);color:#08080F;border-radius:20px;font-size:11px;font-weight:700;padding:1px 7px}
+nav.seite .fuss{margin-top:auto;padding:12px;font-size:12px;color:var(--text3);border-top:1px solid var(--linie)}
+main{padding:28px clamp(16px,3vw,40px) 120px;max-width:1280px;width:100%}
+.kopf{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+.kopf h1{font-size:26px;margin:0;letter-spacing:-.3px}
+.kopf p{margin:4px 0 0;color:var(--text2)}
+.kopf .rechts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.mandantwahl{background:var(--karte);border:1px solid var(--linie);border-radius:9px;padding:8px 10px;min-width:200px}
+.raster{display:grid;gap:14px}
+.r4{grid-template-columns:repeat(4,1fr)}.r3{grid-template-columns:repeat(3,1fr)}.r2{grid-template-columns:repeat(2,1fr)}
+.karte{background:var(--karte);border:1px solid var(--linie);border-radius:var(--r);padding:18px}
+.karte h3{margin:0 0 12px;font-size:15px;display:flex;align-items:center;gap:8px}
+.karte h3 .klein{margin-left:auto}
+.kpi .wert{font-size:30px;font-weight:700;letter-spacing:-.5px}
+.kpi .lbl{font-family:var(--mono);font-size:11px;letter-spacing:1.6px;color:var(--text3);text-transform:uppercase}
+.kpi .unter{color:var(--text2);font-size:13px}
+.knopf{cursor:pointer;border:1px solid var(--linie2);background:var(--karte2);border-radius:9px;padding:9px 14px;font-weight:600;font-size:14px;display:inline-flex;gap:7px;align-items:center;white-space:nowrap}
+.knopf:hover{border-color:var(--text3)}
+.knopf.pri{background:var(--pink);border-color:var(--pink);color:#08080F}
+.knopf.pri:hover{filter:brightness(1.08)}
+.knopf.cy{background:var(--cyan);border-color:var(--cyan);color:#08080F}
+.knopf.gefahr{border-color:rgba(255,92,92,.5);color:var(--rot)}
+.knopf.gefahr.voll{background:var(--rot);color:#fff;border-color:var(--rot)}
+.knopf.klein{padding:5px 10px;font-size:12.5px;border-radius:7px}
+.knopf:disabled{opacity:.45;cursor:not-allowed}
+label.f{display:block;font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin:14px 0 6px}
+input.e,select.e,textarea.e{width:100%;background:var(--bg2);border:1px solid var(--linie);border-radius:9px;padding:11px 12px;outline:none}
+input.e:focus,select.e:focus,textarea.e:focus{border-color:var(--cyan)}
+textarea.e{min-height:90px;resize:vertical}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-family:var(--mono);padding:2px 9px;border-radius:20px;border:1px solid var(--linie2);color:var(--text2);white-space:nowrap}
+.chip.ok{color:var(--gruen);border-color:rgba(61,220,151,.4)}.chip.lauf{color:var(--cyan);border-color:rgba(34,224,255,.4)}
+.chip.warn{color:var(--gelb);border-color:rgba(255,210,63,.45)}.chip.err{color:var(--rot);border-color:rgba(255,92,92,.45)}.chip.pink{color:var(--pink);border-color:rgba(255,45,120,.45)}
+.punkt{width:8px;height:8px;border-radius:50%;background:currentColor;display:inline-block}
+.puls{animation:puls 1.4s infinite}@keyframes puls{50%{opacity:.35}}
+table.t{width:100%;border-collapse:collapse}
+table.t th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:1.4px;color:var(--text3);text-transform:uppercase;font-weight:400;padding:8px;border-bottom:1px solid var(--linie)}
+table.t td{padding:10px 8px;border-bottom:1px solid var(--linie);vertical-align:top}
+table.t tr.klick{cursor:pointer}table.t tr.klick:hover td{background:var(--karte2)}
+.leer{padding:34px;text-align:center;color:var(--text3)}
+.agenten{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.agent{background:radial-gradient(120% 80% at 50% 0%,var(--glow,rgba(34,224,255,.10)),transparent 60%),var(--karte);border:1px solid var(--linie);border-radius:16px;padding:18px;text-align:center;cursor:pointer;transition:transform .15s,border-color .15s;position:relative}
+.agent:hover{transform:translateY(-2px);border-color:var(--linie2)}
+.agent .name{font-weight:700;font-size:17px;margin-top:8px}.agent .rolle{color:var(--text2);font-size:13px}
+.agent .stat{display:flex;justify-content:center;gap:12px;margin-top:10px;font-family:var(--mono);font-size:11.5px;color:var(--text3)}
+.agent .aktivpunkt{position:absolute;top:14px;right:14px}
+.studio{display:grid;grid-template-columns:320px 1fr;gap:18px}
+.buehne{background:radial-gradient(90% 70% at 50% 30%,rgba(255,45,120,.14),transparent 70%),linear-gradient(180deg,#0E0E1A,#08080F);border:1px solid var(--linie);border-radius:18px;padding:22px;text-align:center;position:sticky;top:20px}
+.buehne .nm{font-size:22px;font-weight:700;margin-top:6px}.buehne .rl{color:var(--text2)}
+.wahl{display:flex;gap:6px;flex-wrap:wrap}
+.wahl button{cursor:pointer;border:1px solid var(--linie);background:var(--bg2);border-radius:8px;padding:6px 10px;font-size:13px}
+.wahl button.an{border-color:var(--cyan);color:var(--cyan)}
+.farbe{width:30px;height:30px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0}
+.farbe.an{border-color:#fff}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--linie);margin-bottom:16px;overflow-x:auto}
+.tabs button{all:unset;cursor:pointer;padding:10px 14px;color:var(--text2);font-weight:600;border-bottom:2px solid transparent;white-space:nowrap}
+.tabs button.an{color:var(--text);border-color:var(--pink)}
+.zeitleiste{position:relative;padding-left:22px}
+.zeitleiste:before{content:"";position:absolute;left:7px;top:4px;bottom:4px;width:2px;background:var(--linie)}
+.ereignis{position:relative;margin-bottom:12px}
+.ereignis:before{content:"";position:absolute;left:-19px;top:6px;width:10px;height:10px;border-radius:50%;background:var(--farbe,var(--text3));box-shadow:0 0 0 3px var(--bg)}
+.ereignis .zt{font-family:var(--mono);font-size:11px;color:var(--text3)}
+.ereignis .tx{white-space:pre-wrap;word-break:break-word;font-size:13.5px}
+.ereignis pre,.code{background:#07070C;border:1px solid var(--linie);border-radius:8px;padding:10px;font-family:var(--mono);font-size:12px;overflow:auto;max-height:260px;white-space:pre-wrap;word-break:break-word;margin:6px 0 0}
+.planliste{margin:0;padding-left:20px;color:var(--text2)}
+.zeile{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.zeile.zw{justify-content:space-between}
+.mut{color:var(--text2)}.klein{font-size:12.5px}.mono{font-family:var(--mono)}
+.rechte td select{min-width:190px}
+.art{font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:5px;background:var(--karte2);color:var(--text2);text-transform:uppercase;letter-spacing:1px}
+.art.extern{color:var(--pink)}.art.destruktiv{color:var(--rot)}.art.ausfuehren{color:var(--gelb)}.art.schreiben{color:var(--cyan)}.art.lesen{color:var(--gruen)}
+.regler{width:100%;accent-color:var(--pink)}
+.hinweis{border-left:3px solid var(--gelb);padding:8px 12px;background:rgba(255,210,63,.06);color:var(--text2);font-size:13.5px;border-radius:0 8px 8px 0}
+.hinweis.rot{border-color:var(--rot);background:rgba(255,92,92,.07)}
+.hinweis.cy{border-color:var(--cyan);background:rgba(34,224,255,.06)}
+.notaus{background:linear-gradient(90deg,#3a0711,#1a0408);border:1px solid var(--rot);border-radius:12px;padding:12px 16px;margin-bottom:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+iframe.vorschau{width:100%;height:520px;border:1px solid var(--linie);border-radius:10px;background:#fff}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--karte2);border:1px solid var(--linie2);padding:12px 18px;border-radius:10px;box-shadow:var(--schatten);z-index:99;max-width:90vw}
+.toast.err{border-color:var(--rot)}
+.modal{position:fixed;inset:0;background:rgba(3,3,8,.78);backdrop-filter:blur(4px);z-index:80;display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto}
+.modal .in{background:var(--karte);border:1px solid var(--linie2);border-radius:16px;padding:22px;max-width:720px;width:100%;box-shadow:var(--schatten)}
+.login{max-width:420px;margin:12vh auto;padding:0 16px}
+.mailtext{white-space:pre-wrap;background:var(--bg2);border:1px solid var(--linie);border-radius:8px;padding:12px;font-size:14px}
+.unten{display:none}
+@media (max-width:980px){.r4{grid-template-columns:repeat(2,1fr)}.r3,.r2{grid-template-columns:1fr}.studio{grid-template-columns:1fr}.buehne{position:static}}
+@media (max-width:760px){
+  .app{grid-template-columns:1fr}nav.seite{display:none}
+  main{padding:18px 16px 110px}
+  .unten{display:flex;position:fixed;bottom:0;left:0;right:0;background:rgba(8,8,14,.96);backdrop-filter:blur(8px);border-top:1px solid var(--linie);z-index:50;padding:6px 4px calc(6px + env(safe-area-inset-bottom));overflow-x:auto}
+  .unten button{all:unset;flex:1 0 64px;text-align:center;font-size:10.5px;color:var(--text2);padding:4px 2px;position:relative}
+  .unten button .ic{display:block;font-size:18px}
+  .unten button.an{color:var(--pink)}
+  .unten .zahl{position:absolute;top:0;right:14px;background:var(--pink);color:#08080F;border-radius:10px;font-size:9px;padding:0 5px;font-weight:700}
+  .kopf h1{font-size:22px}.kpi .wert{font-size:24px}
+  table.t.mobil thead{display:none}table.t.mobil tr{display:block;border-bottom:1px solid var(--linie);padding:8px 0}table.t.mobil td{display:block;border:0;padding:3px 4px}
+}
+</style>
+</head>
+<body>
+<div id="root"><div class="leer">Zentrale startet…</div></div>
+<script>
+"use strict";
+/* ================= Grundlagen ================= */
+const $ = (s, e) => (e || document).querySelector(s);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const BASIS = location.pathname.replace(/\/zentrale\/?$/, "");
+const API = BASIS + "/zentrale/api";
+let TOKEN = ""; try { TOKEN = localStorage.getItem("nx:zentrale:token") || ""; } catch (e) {}
+const S = { ich: null, katalog: null, mandanten: [], tid: "", seite: "uebersicht", daten: {}, laufId: "", agentId: "", timer: null, tab: "" };
+try { const m = JSON.parse(localStorage.getItem("nx:zentrale:ui") || "{}"); if (m.tid) S.tid = m.tid; if (m.seite) S.seite = m.seite; } catch (e) {}
+const merkeUi = () => { try { localStorage.setItem("nx:zentrale:ui", JSON.stringify({ tid: S.tid, seite: S.seite })); } catch (e) {} };
+
+async function api(pfad, body, methode) {
+  const h = { "Content-Type": "application/json" };
+  if (TOKEN) h.Authorization = "Bearer " + TOKEN;
+  const r = await fetch(API + pfad, { method: methode || (body !== undefined ? "POST" : "GET"), headers: h, body: body !== undefined ? JSON.stringify(body) : undefined, credentials: "same-origin" });
+  let j = null; try { j = await r.json(); } catch (e) {}
+  if (!r.ok) { const e = new Error((j && j.error) || ("Fehler " + r.status)); e.status = r.status; throw e; }
+  return j;
+}
+const mApi = (p, b) => api("/m/" + S.tid + p, b);
+function toast(t, err) { const d = document.createElement("div"); d.className = "toast" + (err ? " err" : ""); d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), err ? 6000 : 3000); }
+const zeit = (t) => { if (!t) return "–"; const d = new Date(t); return d.toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" }); };
+const seit = (t) => { const s = Math.round((Date.now() - Date.parse(t)) / 1000); return s < 60 ? s + " s" : s < 3600 ? Math.round(s / 60) + " min" : s < 86400 ? Math.round(s / 3600) + " h" : Math.round(s / 86400) + " T"; };
+const STATUS = { laeuft: ["lauf", "Läuft"], wartet: ["lauf", "In Warteschlange"], wartet_freigabe: ["warn", "Wartet auf dich"], fertig: ["ok", "Fertig"], fehler: ["err", "Fehler"], gestoppt: ["", "Gestoppt"] };
+const statusChip = (s) => { const [k, t] = STATUS[s] || ["", s]; return `<span class="chip ${k}"><span class="punkt ${s === "laeuft" ? "puls" : ""}"></span>${esc(t)}</span>`; };
+
+/* ================= Avatar-Generator (SVG, deterministisch) ================= */
+const HAUT = ["#F2D1B5", "#E0B08A", "#C28860", "#8D5A3B", "#5C3A26"];
+function avatarSvg(av, name, groesse) {
+  av = av || {}; const g = groesse || 120, c = av.farbe || "#22E0FF", a = av.akzent || "#FF2D78", haut = HAUT[av.haut || 0] || HAUT[0];
+  const id = "a" + Math.random().toString(36).slice(2, 8);
+  const ini = String(name || "?").split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toUpperCase();
+  const rahmen = { rund: `<circle cx="60" cy="60" r="56"/>`, eckig: `<rect x="6" y="6" width="108" height="108" rx="26"/>`, schild: `<path d="M60 4 L112 22 V62 C112 92 88 110 60 116 C32 110 8 92 8 62 V22 Z"/>`, hex: `<path d="M60 4 L110 32 V88 L60 116 L10 88 V32 Z"/>` }[av.form || "rund"] || `<circle cx="60" cy="60" r="56"/>`;
+  const haare = [
+    `<path d="M36 50 C36 30 50 24 60 24 C72 24 85 30 84 50 C80 40 70 36 60 36 C50 36 40 40 36 50Z" fill="#1d1d2b"/>`,
+    `<path d="M34 54 C32 28 50 20 62 21 C80 22 88 34 86 54 L82 44 C74 34 50 32 38 44Z" fill="#2a1d14"/>`,
+    `<path d="M33 60 C30 30 48 20 61 20 C78 20 90 32 87 60 C88 76 84 84 82 86 L82 52 C76 38 46 36 38 52 L38 86 C34 82 32 74 33 60Z" fill="#3b2416"/>`,
+    `<path d="M36 50 C34 30 48 22 60 22 C74 22 88 30 84 50 C76 34 64 46 52 36 C46 42 40 44 36 50Z" fill="#c8a165"/>`,
+    `<path d="M38 44 C42 26 78 26 82 44 C70 36 50 36 38 44Z" fill="#0f0f17"/><circle cx="60" cy="22" r="9" fill="#0f0f17"/>`,
+  ][av.frisur || 0];
+  const acc = {
+    headset: `<path d="M38 56 C38 34 82 34 82 56" fill="none" stroke="${a}" stroke-width="4"/><rect x="33" y="52" width="9" height="15" rx="4" fill="${a}"/><rect x="78" y="52" width="9" height="15" rx="4" fill="${a}"/><path d="M38 66 C40 76 50 78 56 77" fill="none" stroke="${a}" stroke-width="2.5"/><circle cx="57" cy="77" r="3" fill="${a}"/>`,
+    brille: `<g fill="none" stroke="${a}" stroke-width="2.6"><rect x="43" y="51" width="14" height="10" rx="4"/><rect x="63" y="51" width="14" height="10" rx="4"/><path d="M57 55 H63"/></g>`,
+    lupe: `<circle cx="88" cy="84" r="9" fill="rgba(255,255,255,.08)" stroke="${a}" stroke-width="3"/><path d="M95 91 L103 99" stroke="${a}" stroke-width="4" stroke-linecap="round"/>`,
+    krone: `<path d="M44 30 L50 18 L56 28 L60 14 L64 28 L70 18 L76 30 Z" fill="${a}"/>`,
+    kopfhoerer: `<path d="M36 58 C36 30 84 30 84 58" fill="none" stroke="${a}" stroke-width="5"/><rect x="30" y="52" width="11" height="18" rx="5" fill="${a}"/><rect x="79" y="52" width="11" height="18" rx="5" fill="${a}"/>`,
+    helm: `<path d="M34 52 C34 26 86 26 86 52 Z" fill="${a}" opacity=".9"/><rect x="32" y="48" width="56" height="6" rx="3" fill="${a}"/>`,
+  }[av.accessoire || ""] || "";
+  return `<svg width="${g}" height="${g}" viewBox="0 0 120 120" role="img" aria-label="Avatar ${esc(name)}">
+  <defs><linearGradient id="${id}g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".9"/><stop offset="1" stop-color="${a}" stop-opacity=".75"/></linearGradient>
+  <radialGradient id="${id}h" cx=".5" cy=".35" r=".7"><stop offset="0" stop-color="#1b1b2e"/><stop offset="1" stop-color="#0a0a12"/></radialGradient>
+  <clipPath id="${id}c">${rahmen}</clipPath><filter id="${id}f"><feGaussianBlur stdDeviation="3"/></filter></defs>
+  <g fill="url(#${id}g)" filter="url(#${id}f)" opacity=".55">${rahmen}</g>
+  <g fill="url(#${id}h)" stroke="url(#${id}g)" stroke-width="3">${rahmen}</g>
+  <g clip-path="url(#${id}c)">
+    <path d="M22 120 C24 94 42 86 60 86 C78 86 96 94 98 120Z" fill="${c}" opacity=".95"/>
+    <path d="M50 86 L60 98 L70 86" fill="none" stroke="${a}" stroke-width="3"/>
+    <rect x="53" y="74" width="14" height="14" rx="5" fill="${haut}"/>
+    <ellipse cx="60" cy="56" rx="22" ry="25" fill="${haut}"/>
+    ${haare}
+    <ellipse cx="51" cy="56" rx="2.6" ry="3.2" fill="#14141f"/><ellipse cx="69" cy="56" rx="2.6" ry="3.2" fill="#14141f"/>
+    <circle cx="52" cy="55" r=".9" fill="#fff"/><circle cx="70" cy="55" r=".9" fill="#fff"/>
+    <path d="M53 68 Q60 73 67 68" fill="none" stroke="#7a3b3b" stroke-width="2" stroke-linecap="round"/>
+    ${acc}
+  </g>
+  <g><rect x="80" y="96" width="30" height="18" rx="9" fill="#06060B" stroke="${a}" stroke-width="1.5"/><text x="95" y="109" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="700" fill="${a}">${esc(ini)}</text></g>
+</svg>`;
+}
+
+/* ================= Navigation ================= */
+const SEITEN = [
+  ["uebersicht", "◈", "Übersicht"], ["agenten", "◉", "Agenten"], ["auftraege", "▶", "Aufträge"], ["freigaben", "✓", "Freigaben"],
+  ["office", "✉", "Office"], ["dateien", "▤", "Dateien"], ["kosten", "₣", "Kosten"], ["audit", "⛨", "Audit-Log"], ["einstellungen", "⚙", "Einstellungen"],
+];
+function nav() {
+  const fr = (S.daten.uebersicht && S.daten.uebersicht.freigaben) || 0;
+  const liste = SEITEN.concat(S.ich && S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"]] : []);
+  const knopf = (s, kl) => `<button class="${S.seite === s[0] ? "an" : ""}" data-seite="${s[0]}"><span class="ic">${s[1]}</span>${kl ? "" : ""}${esc(s[2])}${s[0] === "freigaben" && fr ? `<span class="zahl">${fr}</span>` : ""}</button>`;
+  return `<nav class="seite"><div class="marke"><svg width="30" height="30" viewBox="0 0 64 64"><path d="M32 6 L58 32 L32 58 L6 32 Z" fill="none" stroke="#FF2D78" stroke-width="5"/><path d="M32 20 L44 32 L32 44 L20 32 Z" fill="#22E0FF"/></svg><div>NEMESIS<small>ZENTRALE</small></div></div>
+    ${liste.map((s) => knopf(s)).join("")}
+    <div class="fuss">${S.ich ? (S.ich.rolle === "admin" ? "Betreiber" : "Kunde") + " · Engine " + esc(S.ich.version) : ""}<br>Sandbox: ${S.ich ? esc(S.ich.sandbox.modus) : "–"}${TOKEN ? '<br><a href="#" id="abmelden">Abmelden</a>' : ""}</div></nav>
+  <div class="unten">${liste.slice(0, 7).map((s) => `<button class="${S.seite === s[0] ? "an" : ""}" data-seite="${s[0]}"><span class="ic">${s[1]}</span>${esc(s[2])}${s[0] === "freigaben" && fr ? `<span class="zahl">${fr}</span>` : ""}</button>`).join("")}</div>`;
+}
+function mandantWahl() {
+  if (!S.ich || S.ich.rolle !== "admin") return "";
+  return `<select class="mandantwahl" id="tidwahl">${S.mandanten.length ? "" : "<option>– kein Kunde –</option>"}${S.mandanten.map((m) => `<option value="${esc(m.id)}" ${m.id === S.tid ? "selected" : ""}>${esc(m.name)}${m.politik && m.politik.demo ? " · Demo" : ""}</option>`).join("")}</select>`;
+}
+function kopf(titel, unter, rechts) { return `<div class="kopf"><div><h1>${titel}</h1>${unter ? `<p>${unter}</p>` : ""}</div><div class="rechts">${rechts || ""}${mandantWahl()}</div></div>`; }
+
+async function zeichne() {
+  clearTimeout(S.timer);
+  const root = $("#root");
+  if (!S.ich) return;
+  let inhalt = "";
+  try {
+    if (S.seite !== "mandanten" && !S.tid) inhalt = kopf("Willkommen") + `<div class="karte leer">Noch kein Kunde angelegt. ${S.ich.rolle === "admin" ? '<br><br><button class="knopf pri" data-seite="mandanten">Ersten Pilotkunden anlegen</button>' : ""}</div>`;
+    else inhalt = await (SEITE[S.seite] || SEITE.uebersicht)();
+  } catch (e) { inhalt = kopf("Fehler") + `<div class="hinweis rot">${esc(e.message)}</div>`; }
+  const notaus = S.ich.notaus ? `<div class="notaus"><b>⛔ NOTAUS AKTIV</b><span class="mut">Alle Agenten sind gestoppt, neue Aufträge gesperrt.</span>${S.ich.rolle === "admin" ? '<button class="knopf klein" id="notausAus" style="margin-left:auto">Notaus aufheben</button>' : ""}</div>` : "";
+  root.innerHTML = `<div class="app">${nav()}<main>${notaus}${inhalt}</main></div>`;
+  binde();
+  if (S.auto) S.timer = setTimeout(async () => { if (document.hidden) return zeichne(); try { await laden(); } catch (e) {} zeichne(); }, S.auto);
+}
+async function laden() {
+  if (S.ich.rolle === "admin") S.mandanten = (await api("/mandanten")).mandanten;
+  if (S.ich.rolle === "mandant") S.tid = S.ich.mandant;
+  if (S.ich.rolle === "admin" && S.mandanten.length && !S.mandanten.some((m) => m.id === S.tid)) S.tid = S.mandanten[0].id;
+  if (S.tid) S.daten.uebersicht = await mApi("/uebersicht");
+  S.ich = await api("/ich");
+}
+function geh(seite, extra) { S.seite = seite; Object.assign(S, extra || {}); merkeUi(); window.scrollTo(0, 0); zeichne(); }
+
+/* ================= Seiten ================= */
+const SEITE = {};
+SEITE.uebersicht = async () => {
+  S.auto = 5000;
+  const u = S.daten.uebersicht = await mApi("/uebersicht");
+  const aktiv = u.laeufe.filter((l) => ["laeuft", "wartet"].includes(l.status)).length;
+  const k = u.kosten || {}, li = u.limits || {};
+  return kopf(esc(u.mandant.name), (u.mandant.politik.demo ? '<span class="chip warn">Demo-Modus · künstliche Daten</span> ' : "") + esc(u.mandant.branche || ""), `<button class="knopf pri" data-neuauftrag>▶ Neuer Auftrag</button><button class="knopf gefahr" data-stoppalle>■ Alle stoppen</button>`) +
+  `<div class="raster r4">
+    <div class="karte kpi"><div class="lbl">Aktive Aufträge</div><div class="wert" style="color:var(--cyan)">${aktiv}</div><div class="unter">${u.agenten.length} Agenten im Team</div></div>
+    <div class="karte kpi" style="cursor:pointer" data-seite="freigaben"><div class="lbl">Offene Freigaben</div><div class="wert" style="color:${u.freigaben ? "var(--gelb)" : "var(--text)"}">${u.freigaben}</div><div class="unter">warten auf deine Entscheidung</div></div>
+    <div class="karte kpi"><div class="lbl">Mails offen</div><div class="wert">${u.office.mails.offen}</div><div class="unter">${u.office.gesendet} gesendet · 7 Tage</div></div>
+    <div class="karte kpi"><div class="lbl">Kosten heute</div><div class="wert">CHF ${(k.kostenChf || 0).toFixed(2)}</div><div class="unter">${k.llm || 0}/${li.llmProTag} KI-Aufrufe · Limit CHF ${li.kostenProTagChf}</div></div>
+  </div>
+  <div class="raster r2" style="margin-top:14px">
+    <div class="karte"><h3>Team <button class="knopf klein" data-seite="agenten" style="margin-left:auto">Alle</button></h3>
+      ${u.agenten.length ? `<div class="agenten" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr))">${u.agenten.map((a) => `<div class="agent" style="--glow:${a.avatar.farbe}22;padding:12px" data-agent="${a.id}">${a.aktiv ? '<span class="chip lauf aktivpunkt"><span class="punkt puls"></span></span>' : ""}${avatarSvg(a.avatar, a.name, 74)}<div class="name" style="font-size:14px">${esc(a.name)}</div><div class="rolle" style="font-size:12px">${esc(a.rolle)}</div></div>`).join("")}</div>` : `<div class="leer">Noch keine Agenten. <button class="knopf klein" data-neuagent>Agent erstellen</button></div>`}
+    </div>
+    <div class="karte"><h3>Letzte Aufträge</h3>${laufTabelle(u.laeufe.slice(0, 8))}</div>
+  </div>`;
+};
+function laufTabelle(l) {
+  if (!l.length) return `<div class="leer">Noch keine Aufträge.</div>`;
+  return `<table class="t mobil"><thead><tr><th>Agent</th><th>Ziel</th><th>Status</th><th>Schritte</th><th>Start</th></tr></thead><tbody>${l.map((x) => `<tr class="klick" data-lauf="${x.id}"><td><b>${esc(x.agent)}</b>${x.eltern ? ' <span class="chip">Team</span>' : ""}</td><td class="mut">${esc(x.ziel)}</td><td>${statusChip(x.status)}</td><td class="mono klein">${x.schritte} · ${x.werkzeuge} W</td><td class="mono klein">${seit(x.erstellt)}</td></tr>`).join("")}</tbody></table>`;
+}
+
+SEITE.agenten = async () => {
+  S.auto = 0;
+  if (S.agentId) return studio();
+  const a = (await mApi("/agenten")).agenten;
+  const lauf = (S.daten.uebersicht || {}).laeufe || [];
+  return kopf("Agenten", "Deine digitalen Mitarbeiter: Identität, Persönlichkeit, Wissen und Rechte.", `<button class="knopf pri" data-neuagent>＋ Neuer Agent</button>`) +
+    (a.length ? `<div class="agenten">${a.map((x) => `<div class="agent" style="--glow:${x.avatar.farbe}26" data-agent="${x.id}">
+      ${lauf.some((l) => l.agentId === x.id && ["laeuft", "wartet"].includes(l.status)) ? '<span class="chip lauf aktivpunkt"><span class="punkt puls"></span>aktiv</span>' : ""}
+      ${avatarSvg(x.avatar, x.name, 112)}<div class="name">${esc(x.name)}</div><div class="rolle">${esc(x.rolle)}</div>
+      <div class="stat"><span>⚙ ${Object.values(x.werkzeuge).filter((v) => v !== "aus").length} Werkzeuge</span><span>◎ Stufe ${x.autonomie}</span><span>✓ ${x.statistik.erfolgreich}/${x.statistik.laeufe}</span></div></div>`).join("")}</div>`
+      : `<div class="karte leer">Noch keine Agenten.<br><br><button class="knopf pri" data-neuagent>Ersten Agenten erstellen</button></div>`);
+};
+
+let ENTWURF = null;
+async function studio() {
+  const kat = S.katalog;
+  if (!ENTWURF || ENTWURF._id !== S.agentId) {
+    if (S.agentId === "neu") ENTWURF = { _id: "neu", name: "", rolle: "", fachgebiet: "", persoenlichkeit: { ton: "", stil: "", eigenschaften: [], antrieb: "" }, modell: "auto", anweisungen: "", wissen: [], werkzeuge: {}, autonomie: 1, avatar: { form: "rund", farbe: "#22E0FF", akzent: "#FF2D78", frisur: 0, accessoire: "", haut: 0 }, team: [], limits: { maxSchritte: 60, maxLlm: 120, maxWerkzeuge: 200 } };
+    else { const a = (await mApi("/agenten")).agenten.find((x) => x.id === S.agentId); if (!a) { S.agentId = ""; return SEITE.agenten(); } ENTWURF = JSON.parse(JSON.stringify(a)); ENTWURF._id = a.id; }
+  }
+  const E = ENTWURF, tab = S.tab || "identitaet";
+  const alle = (await mApi("/agenten")).agenten.filter((x) => x.id !== E.id);
+  const farben = ["#22E0FF", "#FF2D78", "#FFD23F", "#3DDC97", "#A78BFA", "#FF8A3D", "#E5E7EB"];
+  const tabs = [["identitaet", "Identität"], ["aussehen", "Avatar"], ["rechte", "Werkzeuge & Rechte"], ["wissen", "Wissen & Gedächtnis"], ["team", "Team & Limits"]];
+  let body = "";
+  if (tab === "identitaet") body = `
+    ${S.agentId === "neu" ? `<label class="f">Vorlage (optional)</label><div class="wahl">${kat.vorlagen.map((v) => `<button data-vorlage="${v}">${esc(v)}</button>`).join("")}</div>` : ""}
+    <div class="raster r2"><div><label class="f">Name</label><input class="e" data-feld="name" value="${esc(E.name)}" maxlength="40" placeholder="z.B. Nora"></div>
+    <div><label class="f">Rolle</label><input class="e" data-feld="rolle" value="${esc(E.rolle)}" placeholder="z.B. Office-Assistentin"></div></div>
+    <label class="f">Fachgebiet</label><input class="e" data-feld="fachgebiet" value="${esc(E.fachgebiet)}" placeholder="Wofür ist der Agent zuständig?">
+    <div class="raster r2"><div><label class="f">Tonfall</label><input class="e" data-p="ton" value="${esc(E.persoenlichkeit.ton)}" placeholder="freundlich, Sie-Form"></div>
+    <div><label class="f">Arbeitsstil</label><input class="e" data-p="stil" value="${esc(E.persoenlichkeit.stil)}" placeholder="gründlich, testet alles"></div></div>
+    <label class="f">Eigenschaften (Komma-getrennt)</label><input class="e" data-p="eigenschaften" value="${esc((E.persoenlichkeit.eigenschaften || []).join(", "))}">
+    <label class="f">Antrieb</label><input class="e" data-p="antrieb" value="${esc(E.persoenlichkeit.antrieb)}" placeholder="Was treibt den Agenten an?">
+    <label class="f">Modell</label><select class="e" data-feld="modell">${kat.modelle.map((m) => `<option ${m === E.modell ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>
+    <label class="f">Zusätzliche Anweisungen</label><textarea class="e" data-feld="anweisungen" placeholder="Regeln, Firmeninfos, No-Gos …">${esc(E.anweisungen)}</textarea>`;
+  if (tab === "aussehen") body = `
+    <label class="f">Form</label><div class="wahl">${["rund", "eckig", "schild", "hex"].map((f) => `<button class="${E.avatar.form === f ? "an" : ""}" data-av="form" data-wert="${f}">${f}</button>`).join("")}</div>
+    <label class="f">Hauptfarbe</label><div class="wahl">${farben.map((f) => `<button class="farbe ${E.avatar.farbe === f ? "an" : ""}" style="background:${f}" data-av="farbe" data-wert="${f}" aria-label="${f}"></button>`).join("")}</div>
+    <label class="f">Akzent</label><div class="wahl">${farben.map((f) => `<button class="farbe ${E.avatar.akzent === f ? "an" : ""}" style="background:${f}" data-av="akzent" data-wert="${f}" aria-label="${f}"></button>`).join("")}</div>
+    <label class="f">Haut</label><div class="wahl">${HAUT.map((f, i) => `<button class="farbe ${E.avatar.haut === i ? "an" : ""}" style="background:${f}" data-av="haut" data-wert="${i}" aria-label="Hautton ${i + 1}"></button>`).join("")}</div>
+    <label class="f">Frisur</label><div class="wahl">${[0, 1, 2, 3, 4].map((i) => `<button class="${E.avatar.frisur === i ? "an" : ""}" data-av="frisur" data-wert="${i}">Stil ${i + 1}</button>`).join("")}</div>
+    <label class="f">Accessoire</label><div class="wahl">${["", "headset", "brille", "lupe", "krone", "kopfhoerer", "helm"].map((x) => `<button class="${E.avatar.accessoire === x ? "an" : ""}" data-av="accessoire" data-wert="${x}">${x || "keins"}</button>`).join("")}</div>`;
+  if (tab === "rechte") {
+    const gr = {}; for (const w of kat.werkzeuge) (gr[w.kategorie] = gr[w.kategorie] || []).push(w);
+    body = `<div class="hinweis cy">Rechte werden <b>bei jeder Ausführung auf dem Server geprüft</b>. Der Agent kann sie nicht selbst ändern. Aktionen nach aussen (z.B. E-Mail senden) brauchen immer eine Freigabe, ausser der Betreiber erlaubt es ausdrücklich.</div>
+    <label class="f">Autonomie-Level: ${E.autonomie} · ${esc(kat.autonomie[E.autonomie].name)}</label>
+    <input type="range" class="regler" min="0" max="3" step="1" value="${E.autonomie}" data-feld="autonomie"><div class="mut klein">${esc(kat.autonomie[E.autonomie].text)}</div>
+    <div class="zeile" style="margin:14px 0 4px"><span class="mut klein">Schnell setzen:</span><button class="knopf klein" data-alle="aus">Alle aus</button><button class="knopf klein" data-alle="lesen">Alle nur lesen</button><button class="knopf klein" data-alle="bestaetigung">Alle mit Bestätigung</button></div>
+    ${Object.entries(gr).map(([k, l]) => `<h4 style="margin:18px 0 6px">${esc(k)}</h4><table class="t rechte mobil"><tbody>${l.map((w) => `<tr><td style="width:40%"><b class="mono">${esc(w.name)}</b> <span class="art ${w.art}">${w.art}</span>${w.immerFreigabe ? ' <span class="chip pink">immer Freigabe</span>' : ""}${w.liestFremdes ? ' <span class="chip warn">Fremdinhalt</span>' : ""}<div class="mut klein">${esc(w.text)}</div></td><td><select class="e" data-recht="${w.name}">${kat.modi.map((m) => `<option value="${m.id}" ${(E.werkzeuge[w.name] || "aus") === m.id ? "selected" : ""}>${esc(m.text)}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table>`).join("")}`;
+  }
+  if (tab === "wissen") body = `
+    <div class="zeile zw"><h4 style="margin:0">Wissensbasis</h4><button class="knopf klein" data-wissenneu>＋ Eintrag</button></div>
+    ${(E.wissen || []).map((w, i) => `<div class="karte" style="margin-top:10px;padding:12px"><input class="e" data-wissen="${i}" data-wf="titel" value="${esc(w.titel)}" placeholder="Titel"><textarea class="e" style="margin-top:8px" data-wissen="${i}" data-wf="text" placeholder="Inhalt">${esc(w.text)}</textarea><button class="knopf klein gefahr" style="margin-top:6px" data-wissenweg="${i}">Entfernen</button></div>`).join("") || '<div class="leer">Noch kein Wissen. Füge Preise, Öffnungszeiten, Abläufe, FAQ hinzu.</div>'}
+    <h4>Gedächtnis (vom Agenten selbst gelernt)</h4>${(E.gedaechtnis || []).length ? `<ul>${E.gedaechtnis.slice().reverse().map((g) => `<li><span class="mono klein mut">${zeit(g.t)}</span> ${esc(g.text)}</li>`).join("")}</ul>` : '<div class="mut">Noch leer.</div>'}`;
+  if (tab === "team") body = `
+    <label class="f">Darf delegieren an (leer = an alle mit Werkzeug „delegieren“)</label>
+    <div class="wahl">${alle.map((x) => `<button class="${(E.team || []).includes(x.id) ? "an" : ""}" data-team="${x.id}">${esc(x.name)}</button>`).join("") || '<span class="mut">Keine anderen Agenten.</span>'}</div>
+    <div class="hinweis" style="margin-top:12px">Unteragenten erhalten höchstens die Rechte des Auftraggebers (Schnittmenge).</div>
+    <div class="raster r3"><div><label class="f">Max. Schritte / Auftrag</label><input class="e" type="number" data-limit="maxSchritte" value="${E.limits.maxSchritte}"></div>
+    <div><label class="f">Max. KI-Aufrufe</label><input class="e" type="number" data-limit="maxLlm" value="${E.limits.maxLlm}"></div>
+    <div><label class="f">Max. Werkzeug-Aufrufe</label><input class="e" type="number" data-limit="maxWerkzeuge" value="${E.limits.maxWerkzeuge}"></div></div>`;
+  return kopf(S.agentId === "neu" ? "Avatar Studio · Neuer Agent" : "Avatar Studio · " + esc(E.name), "", `<button class="knopf" data-zurueck>← Zurück</button>${S.agentId !== "neu" ? `<button class="knopf cy" data-neuauftrag="${E.id}">▶ Auftrag geben</button><button class="knopf gefahr" data-agentweg>Löschen</button>` : ""}<button class="knopf pri" data-speichern>Speichern</button>`) +
+  `<div class="studio"><div class="buehne"><div id="avatarbuehne">${avatarSvg(E.avatar, E.name || "?", 220)}</div><div class="nm" id="avnm">${esc(E.name || "Neuer Agent")}</div><div class="rl">${esc(E.rolle || "Rolle")}</div>
+    <div class="zeile" style="justify-content:center;margin-top:12px"><span class="chip pink">Stufe ${E.autonomie}</span><span class="chip">${Object.values(E.werkzeuge).filter((v) => v !== "aus").length} Werkzeuge</span><span class="chip">${(E.wissen || []).length} Wissen</span></div>
+    ${E.statistik ? `<div class="mut klein" style="margin-top:10px">${E.statistik.erfolgreich} von ${E.statistik.laeufe} Aufträgen erfolgreich · ${E.statistik.werkzeuge} Aktionen</div>` : ""}</div>
+    <div class="karte"><div class="tabs">${tabs.map(([k, t]) => `<button class="${tab === k ? "an" : ""}" data-tab="${k}">${t}</button>`).join("")}</div>${body}</div></div>`;
+}
+
+SEITE.auftraege = async () => {
+  if (S.laufId) return laufDetail();
+  S.auto = 4000;
+  const l = (await mApi("/laeufe")).laeufe;
+  return kopf("Aufträge", "Live-Monitor: Was deine Agenten gerade tun.", `<button class="knopf pri" data-neuauftrag>▶ Neuer Auftrag</button><button class="knopf gefahr" data-stoppalle>■ Alle stoppen</button>`) + `<div class="karte">${laufTabelle(l)}</div>`;
+};
+async function laufDetail() {
+  const { lauf: l } = await mApi("/laeufe/" + S.laufId);
+  S.auto = ["laeuft", "wartet", "wartet_freigabe"].includes(l.status) ? 2500 : 0;
+  const farbe = { start: "var(--cyan)", plan: "var(--lila)", gedanke: "var(--text3)", werkzeug: "var(--cyan)", ergebnis: "var(--gruen)", werkzeugfehler: "var(--rot)", gesperrt: "var(--rot)", freigabe: "var(--gelb)", entscheid: "var(--gelb)", frage: "var(--gelb)", fertig: "var(--gruen)", fehler: "var(--rot)", stopp: "var(--rot)", pruefung: "var(--lila)", delegation: "var(--pink)", warnung: "var(--gelb)" };
+  const titel = { start: "Start", plan: "Analyse & Plan", gedanke: "Gedanke", werkzeug: "Aktion", ergebnis: "Ergebnis", werkzeugfehler: "Fehler (wird korrigiert)", gesperrt: "Gesperrt durch Rechte", freigabe: "Freigabe angefragt", entscheid: "Entscheid", frage: "Rückfrage", fertig: "Fertig", fehler: "Abbruch", stopp: "Gestoppt", pruefung: "Abschlussprüfung (Build/Tests)", delegation: "Delegiert", warnung: "Warnung" };
+  const ev = l.log.slice().reverse().slice(0, 200).map((e) => `<div class="ereignis" style="--farbe:${farbe[e.typ] || "var(--text3)"}"><div class="zt">${zeit(e.t)} · ${esc(titel[e.typ] || e.typ)}${e.werkzeug ? " · <b>" + esc(e.werkzeug) + "</b>" : ""}${e.ms ? " · " + e.ms + " ms" : ""}${e.typ === "pruefung" ? (e.ok ? ' <span class="chip ok">bestanden</span>' : ' <span class="chip err">fehlgeschlagen</span>') : ""}</div>
+    ${e.typ === "plan" ? `<div class="tx mut">${esc(e.analyse)}</div><ol class="planliste">${(e.plan || []).map((p) => `<li>${esc(p)}</li>`).join("")}</ol>` : ""}
+    ${e.x ? (["ergebnis", "werkzeugfehler", "pruefung"].includes(e.typ) ? `<pre>${esc(e.x)}</pre>` : `<div class="tx">${esc(e.x)}</div>`) : ""}${e.args ? `<pre>${esc(e.args)}</pre>` : ""}</div>`).join("");
+  const fr = l.freigabe && !l.freigabe.entscheid ? `<div class="karte" style="border-color:var(--gelb);margin-bottom:14px"><h3>⚠ ${l.freigabe.art === "frage" ? "Rückfrage des Agenten" : "Freigabe nötig: " + esc(l.freigabe.werkzeug)}</h3>
+    ${l.freigabe.art === "frage" ? `<div class="mailtext">${esc(l.freigabe.frage)}</div><textarea class="e" id="frAntwort" style="margin-top:10px" placeholder="Deine Antwort"></textarea>` : `<div class="mut">${esc(l.freigabe.grund)}</div><pre class="code">${esc(JSON.stringify(l.freigabe.args, null, 2))}</pre><input class="e" id="frNotiz" placeholder="Notiz (optional)" style="margin-top:8px">`}
+    <div class="zeile" style="margin-top:10px"><button class="knopf pri" data-frlauf="${l.id}" data-fr="ja" data-frid="${l.freigabe.id}">${l.freigabe.art === "frage" ? "Antworten" : "Freigeben & ausführen"}</button>${l.freigabe.art === "frage" ? "" : `<button class="knopf gefahr" data-frlauf="${l.id}" data-fr="nein" data-frid="${l.freigabe.id}">Ablehnen</button>`}</div></div>` : "";
+  const rest = l.deadline ? Math.max(0, Math.round((l.deadline - Date.now()) / 60000)) : null;
+  return kopf("Auftrag · " + esc(l.agentName), esc(l.ziel), `<button class="knopf" data-zurueck>← Zurück</button>${["laeuft", "wartet", "wartet_freigabe"].includes(l.status) ? `<button class="knopf gefahr voll" data-stopp="${l.id}">■ Stoppen</button>` : ""}`) +
+  `<div class="raster r4" style="margin-bottom:14px">
+    <div class="karte kpi"><div class="lbl">Status</div><div style="margin-top:6px">${statusChip(l.status)}</div><div class="unter">${esc(l.phase)}</div></div>
+    <div class="karte kpi"><div class="lbl">Schritte</div><div class="wert">${l.zaehler.schritte}</div><div class="unter">${l.zaehler.werkzeuge} Aktionen · ${l.zaehler.korrekturen} Korrekturen</div></div>
+    <div class="karte kpi"><div class="lbl">KI-Aufrufe</div><div class="wert">${l.zaehler.llm}</div><div class="unter">~${Math.round(l.zaehler.tokens / 1000)}k Tokens${l.modellZuletzt ? " · " + esc(l.modellZuletzt) : ""}</div></div>
+    <div class="karte kpi"><div class="lbl">Zeitbudget</div><div class="wert">${l.stunden} h</div><div class="unter">${rest != null && !l.ende ? rest + " min übrig" : l.ende ? "beendet " + zeit(l.ende) : "–"}</div></div></div>
+  ${fr}
+  ${l.ergebnis ? `<div class="karte" style="border-color:rgba(61,220,151,.4);margin-bottom:14px"><h3>✓ Ergebnis</h3><div class="mailtext">${esc(l.ergebnis)}</div></div>` : ""}
+  ${l.fehler ? `<div class="hinweis rot" style="margin-bottom:14px">${esc(l.fehler)}</div>` : ""}
+  ${l.vorschauUrl ? `<div class="karte" style="margin-bottom:14px"><h3>Vorschau <a class="knopf klein" style="margin-left:auto" target="_blank" rel="noopener" href="${BASIS}/zentrale/${esc(l.vorschauUrl)}">In neuem Tab ↗</a></h3><iframe class="vorschau" sandbox="allow-scripts allow-forms" src="${BASIS}/zentrale/${esc(l.vorschauUrl)}"></iframe></div>` : ""}
+  <div class="raster" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr)"><div class="karte"><h3>Ausführungsprotokoll</h3><div class="zeitleiste">${ev}</div></div>
+  <div class="karte"><h3>Rechte in diesem Lauf</h3><div class="mut klein">Eingefroren beim Start · Autonomie ${l.autonomie}</div><table class="t" style="margin-top:8px"><tbody>${Object.entries(l.rechte).filter(([, v]) => v !== "aus").map(([k, v]) => `<tr><td class="mono klein">${esc(k)}</td><td class="klein">${esc(S.katalog.modi.find((m) => m.id === v).text)}</td></tr>`).join("")}</tbody></table>
+  <h3 style="margin-top:18px">Dateien <button class="knopf klein" style="margin-left:auto" data-projekt="${esc(l.projekt)}">Öffnen</button></h3><div class="mut klein mono">Projekt: ${esc(l.projekt)}</div></div></div>`;
+}
+
+SEITE.freigaben = async () => {
+  S.auto = 5000;
+  const f = (await mApi("/freigaben")).freigaben;
+  return kopf("Freigabe-Center", "Nichts geht ohne dich nach aussen. Prüfen, anpassen, freigeben.") + (f.length ? f.map((x) => x.art === "entwurf" ? `<div class="karte" style="margin-bottom:12px"><h3>✉ Antwortentwurf <span class="chip">${esc(x.agent)}</span><span class="mut klein" style="margin-left:auto">${zeit(x.erstellt)}</span></h3>
+      <div class="mut klein">An: <b>${esc(x.an)}</b></div><input class="e" data-ebetreff="${x.id}" value="${esc(x.betreff)}" style="margin-top:8px"><textarea class="e" data-etext="${x.id}" style="min-height:150px;margin-top:8px">${esc(x.text)}</textarea>
+      <div class="zeile" style="margin-top:10px"><button class="knopf pri" data-esenden="${x.id}">Freigeben & senden</button><button class="knopf gefahr" data-everwerfen="${x.id}">Verwerfen</button></div></div>`
+    : `<div class="karte" style="margin-bottom:12px;border-color:rgba(255,210,63,.4)"><h3>⚠ ${x.art === "frage" ? "Rückfrage" : esc(x.werkzeug)} <span class="chip">${esc(x.agent)}</span><span class="mut klein" style="margin-left:auto">${zeit(x.erstellt)}</span></h3><div class="mut">${esc(x.ziel)}</div>
+      ${x.art === "frage" ? `<div class="mailtext" style="margin-top:8px">${esc(x.frage)}</div>` : `<div class="hinweis" style="margin-top:8px">${esc(x.grund)}</div><pre class="code">${esc(JSON.stringify(x.args, null, 2))}</pre>`}
+      <div class="zeile" style="margin-top:10px"><button class="knopf" data-lauf="${x.lauf}">Auftrag ansehen</button>${x.art === "frage" ? "" : `<button class="knopf pri" data-frlauf="${x.lauf}" data-fr="ja" data-frid="${x.id}">Freigeben</button><button class="knopf gefahr" data-frlauf="${x.lauf}" data-fr="nein" data-frid="${x.id}">Ablehnen</button>`}</div></div>`).join("") : `<div class="karte leer">✓ Alles erledigt. Keine offenen Freigaben.</div>`);
+};
+
+SEITE.office = async () => {
+  S.auto = 6000;
+  const o = await mApi("/office"), tab = S.tab && S.tab.startsWith("o:") ? S.tab : "o:post";
+  const demo = S.daten.uebersicht && S.daten.uebersicht.mandant.politik.demo;
+  const office = (S.daten.uebersicht || { agenten: [] }).agenten.find((a) => /office/i.test(a.rolle));
+  const prio = { hoch: "err", normal: "", tief: "" };
+  const tabs = [["o:post", "Posteingang (" + o.posteingang.length + ")"], ["o:entw", "Entwürfe (" + o.entwuerfe.filter((e) => e.status === "entwurf").length + ")"], ["o:aus", "Gesendet (" + o.ausgang.length + ")"], ["o:auf", "Aufgaben (" + o.aufgaben.filter((a) => a.status === "offen").length + ")"], ["o:dok", "Dokumente"]];
+  let b = "";
+  if (tab === "o:post") b = o.posteingang.length ? `<table class="t mobil"><thead><tr><th>Von</th><th>Betreff</th><th>Kategorie</th><th>Status</th><th>Datum</th></tr></thead><tbody>${o.posteingang.slice().reverse().map((m) => `<tr class="klick" data-mail="${m.id}"><td>${esc(m.von)}${m.demo ? ' <span class="chip warn">Demo</span>' : ""}</td><td><b>${esc(m.betreff)}</b><div class="mut klein">${esc(m.zusammenfassung || m.text.slice(0, 120))}</div></td><td>${m.kategorie ? `<span class="chip ${prio[m.prioritaet] || ""}">${esc(m.kategorie)}${m.prioritaet === "hoch" ? " · hoch" : ""}</span>` : '<span class="mut">–</span>'}</td><td><span class="chip">${esc(m.status)}</span></td><td class="mono klein">${zeit(m.datum)}</td></tr>`).join("")}</tbody></table>` : `<div class="leer">Posteingang leer.</div>`;
+  if (tab === "o:entw") b = o.entwuerfe.length ? o.entwuerfe.slice().reverse().map((e) => `<div class="karte" style="margin-bottom:10px"><div class="zeile zw"><b>${esc(e.betreff)}</b><span class="chip ${e.status === "gesendet" ? "ok" : e.status === "verworfen" ? "" : "warn"}">${esc(e.status)}</span></div><div class="mut klein">An ${esc(e.an)} · von ${esc(e.von)} · ${zeit(e.erstellt)}</div><div class="mailtext" style="margin-top:8px">${esc(e.text)}</div>${e.status === "entwurf" ? '<button class="knopf klein" style="margin-top:8px" data-seite="freigaben">Im Freigabe-Center prüfen</button>' : ""}</div>`).join("") : `<div class="leer">Keine Entwürfe.</div>`;
+  if (tab === "o:aus") b = o.ausgang.length ? `<table class="t mobil"><thead><tr><th>An</th><th>Betreff</th><th>Kanal</th><th>Gesendet</th><th>Durch</th></tr></thead><tbody>${o.ausgang.slice().reverse().map((x) => `<tr><td>${esc(x.an)}</td><td>${esc(x.betreff)}</td><td>${x.kanal === "demo" ? '<span class="chip warn">Demo, nicht versendet</span>' : '<span class="chip ok">E-Mail</span>'}</td><td class="mono klein">${zeit(x.gesendet)}</td><td class="klein mut">${esc(x.akteur)}</td></tr>`).join("")}</tbody></table>` : `<div class="leer">Noch nichts gesendet.</div>`;
+  if (tab === "o:auf") b = o.aufgaben.length ? `<table class="t mobil"><thead><tr><th>Aufgabe</th><th>Fällig</th><th>Status</th><th>Von</th></tr></thead><tbody>${o.aufgaben.slice().reverse().map((a) => `<tr><td>${esc(a.titel)}</td><td class="mono klein">${esc(a.faellig || "–")}</td><td><span class="chip ${a.status === "erledigt" ? "ok" : "lauf"}">${esc(a.status)}</span></td><td class="mut klein">${esc(a.von || "")}</td></tr>`).join("")}</tbody></table>` : `<div class="leer">Keine Aufgaben.</div>`;
+  if (tab === "o:dok") { const d = (await mApi("/dokumente")).dokumente.filter((x) => !x.ordner); b = d.length ? `<table class="t"><tbody>${d.map((x) => `<tr class="klick" data-dok="${esc(x.pfad)}"><td class="mono">${esc(x.pfad)}</td><td class="mono klein mut">${(x.groesse / 1024).toFixed(1)} KB</td></tr>`).join("")}</tbody></table>` : `<div class="leer">Noch keine Dokumente.</div>`; }
+  return kopf("NEMESIS Office", "Anfragen, E-Mails, Antworten, Aufgaben und Dokumente – erledigt von deinem Office-Agenten.",
+    (office ? `<button class="knopf pri" data-officelauf="${office.id}">▶ ${esc(office.name)}: Posteingang abarbeiten</button><button class="knopf" data-officebericht="${office.id}">Wochenbericht</button>` : `<button class="knopf pri" data-neuagent>Office-Agent erstellen</button>`) + (demo ? `<button class="knopf" data-demo>Demo-Mails laden</button>` : "") + `<button class="knopf" data-mailneu>＋ Anfrage erfassen</button>`) +
+    `${demo ? '<div class="hinweis" style="margin-bottom:12px">Demo-Modus: alle Mails sind künstlich. „Senden“ wird nur protokolliert, nichts verlässt den Server.</div>' : ""}
+    <div class="karte"><div class="tabs">${tabs.map(([k, t]) => `<button class="${tab === k ? "an" : ""}" data-tab="${k}">${t}</button>`).join("")}</div>${b}</div>
+    <div class="karte" style="margin-top:14px"><h3>Kontaktformular für die Kunden-Website</h3><div class="mut klein">Anfragen landen direkt im Posteingang.</div><pre class="code">${esc(`<form onsubmit="event.preventDefault();fetch('${location.origin}/zentrale/oeffentlich/${S.tid}/anfrage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(this)))}).then(()=>this.innerHTML='Danke!')">
+  <input name="name" placeholder="Name"> <input name="email" type="email" required placeholder="E-Mail">
+  <textarea name="nachricht" required placeholder="Ihre Nachricht"></textarea>
+  <input name="website" style="display:none"><button>Senden</button></form>`)}</pre></div>`;
+};
+
+SEITE.dateien = async () => {
+  S.auto = 0;
+  const laeufe = (await mApi("/laeufe")).laeufe;
+  const projekte = [...new Set(laeufe.map((l) => l.projekt))];
+  const p = S.projekt && projekte.includes(S.projekt) ? S.projekt : projekte[0];
+  if (!p) return kopf("Projekte & Dateien") + `<div class="karte leer">Noch keine Projekte.</div>`;
+  const d = (await mApi("/dateien?projekt=" + encodeURIComponent(p))).dateien;
+  return kopf("Projekte & Dateien", "Arbeitsordner der Agenten (nur lesen).") + `<div class="raster" style="grid-template-columns:minmax(0,1fr) minmax(0,2fr)"><div class="karte"><label class="f" style="margin-top:0">Projekt</label><select class="e" id="projektwahl">${projekte.map((x) => `<option ${x === p ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
+    <div style="margin-top:12px">${d.map((x) => x.ordner ? `<div class="mono klein mut" style="padding:3px 0">${esc(x.pfad)}${x.ausgeblendet ? " (ausgeblendet)" : ""}</div>` : `<div class="mono klein" style="padding:3px 0;cursor:pointer;color:var(--cyan)" data-datei="${esc(x.pfad)}" data-dprojekt="${esc(p)}">${esc(x.pfad)} <span class="mut">${(x.groesse / 1024).toFixed(1)} KB</span></div>`).join("") || '<div class="mut">leer</div>'}</div></div>
+    <div class="karte"><h3 id="dateititel">Datei wählen</h3><pre class="code" id="dateiinhalt" style="max-height:70vh">–</pre></div></div>`;
+};
+
+SEITE.kosten = async () => {
+  S.auto = 0;
+  const k = await mApi("/kosten"); const tage = Object.keys(k.verlauf).sort().slice(-30);
+  const max = Math.max(1, ...tage.map((t) => k.verlauf[t].llm));
+  return kopf("Kosten & Limits", "Jeder KI-Aufruf und jede Aktion wird gezählt. Limits greifen hart auf dem Server.") +
+  `<div class="raster r4"><div class="karte kpi"><div class="lbl">KI-Aufrufe heute</div><div class="wert">${k.heute.llm}</div><div class="unter">Limit ${k.limits.llmProTag}</div></div>
+   <div class="karte kpi"><div class="lbl">Aktionen heute</div><div class="wert">${k.heute.werkzeuge}</div><div class="unter">Limit ${k.limits.werkzeugeProTag}</div></div>
+   <div class="karte kpi"><div class="lbl">Tokens heute</div><div class="wert">${Math.round(k.heute.tokens / 1000)}k</div><div class="unter">geschätzt</div></div>
+   <div class="karte kpi"><div class="lbl">Kosten heute</div><div class="wert">CHF ${k.heute.kostenChf.toFixed(2)}</div><div class="unter">Limit CHF ${k.limits.kostenProTagChf}</div></div></div>
+   <div class="karte" style="margin-top:14px"><h3>KI-Aufrufe pro Tag (30 Tage)</h3>${tage.length ? `<svg viewBox="0 0 ${tage.length * 24} 130" style="width:100%;height:160px" role="img" aria-label="Verlauf KI-Aufrufe">${tage.map((t, i) => { const h = Math.round(k.verlauf[t].llm / max * 100); return `<rect x="${i * 24 + 4}" y="${110 - h}" width="16" height="${h}" rx="3" fill="#22E0FF"><title>${t}: ${k.verlauf[t].llm} Aufrufe, ${k.verlauf[t].werkzeuge} Aktionen</title></rect><text x="${i * 24 + 12}" y="125" font-size="8" text-anchor="middle" fill="#6E6E8C">${t.slice(8)}</text>`; }).join("")}</svg>` : '<div class="leer">Noch keine Daten.</div>'}</div>
+   <div class="karte" style="margin-top:14px"><h3>Limits ${S.ich.rolle === "admin" ? "" : '<span class="chip">nur Betreiber</span>'}</h3>
+   <div class="raster r3">${[["llmProTag", "KI-Aufrufe/Tag"], ["werkzeugeProTag", "Aktionen/Tag"], ["kostenProTagChf", "CHF/Tag"], ["maxParallel", "Parallele Aufträge"], ["maxStunden", "Max. Stunden/Auftrag"]].map(([f, t]) => `<div><label class="f">${t}</label><input class="e" type="number" step="any" data-mlimit="${f}" value="${k.limits[f]}" ${S.ich.rolle === "admin" ? "" : "disabled"}></div>`).join("")}</div>
+   ${S.ich.rolle === "admin" ? '<button class="knopf pri" style="margin-top:12px" data-limitsspeichern>Limits speichern</button>' : ""}</div>`;
+};
+
+SEITE.audit = async () => {
+  S.auto = 0;
+  const a = await mApi("/audit?n=400");
+  return kopf("Audit-Log", "Lückenlos und manipulationssicher (Hash-Kette). Wer hat wann was getan.", `<button class="knopf" data-export>⇩ Export (Sicherung)</button>`) +
+  `<div class="hinweis ${a.pruefung.ok ? "cy" : "rot"}" style="margin-bottom:12px">${a.pruefung.ok ? "✓ Kette intakt" : "✗ Kette BESCHÄDIGT bei Eintrag " + a.pruefung.bruchBei} · ${a.pruefung.eintraege} Einträge</div>
+  <div class="karte"><table class="t mobil"><thead><tr><th>Zeit</th><th>Akteur</th><th>Aktion</th><th>Details</th></tr></thead><tbody>${a.eintraege.map((e) => `<tr><td class="mono klein">${zeit(e.t)}</td><td class="klein">${esc(e.akteur)}</td><td><span class="chip ${/gesperrt|fehler|notaus|geloescht/.test(e.aktion) ? "err" : /freigabe/.test(e.aktion) ? "warn" : /fertig|gesendet/.test(e.aktion) ? "ok" : ""}">${esc(e.aktion)}</span></td><td class="mono klein mut" style="max-width:420px;word-break:break-word">${esc(JSON.stringify(e.d)).slice(0, 300)}</td></tr>`).join("")}</tbody></table></div>`;
+};
+
+SEITE.einstellungen = async () => {
+  S.auto = 0;
+  const u = S.daten.uebersicht || (S.daten.uebersicht = await mApi("/uebersicht"));
+  const g = (await mApi("/geheimnisse")).geheimnisse, m = u.mandant, s = m.smtp || {};
+  return kopf("Einstellungen", esc(m.name)) + `<div class="raster r2">
+  <div class="karte"><h3>E-Mail-Versand (SMTP)</h3><div class="mut klein">Für echten Versand. Im Demo-Modus wird nie versendet.</div>
+    <div class="raster r2"><div><label class="f">Server</label><input class="e" id="smHost" value="${esc(s.host || "")}" placeholder="mail.beispiel.ch"></div><div><label class="f">Port</label><input class="e" id="smPort" type="number" value="${esc(s.port || 587)}"></div></div>
+    <div class="raster r2"><div><label class="f">Benutzer</label><input class="e" id="smUser" value="${esc(s.benutzer || "")}"></div><div><label class="f">Passwort ${g.some((x) => x.name === "smtp_passwort") ? '<span class="chip ok">gespeichert</span>' : ""}</label><input class="e" id="smPw" type="password" placeholder="${g.some((x) => x.name === "smtp_passwort") ? "unverändert lassen" : ""}" autocomplete="new-password"></div></div>
+    <div class="raster r2"><div><label class="f">Absender</label><input class="e" id="smVon" value="${esc(s.von || "")}" placeholder="office@firma.ch"></div><div><label class="f">Absendername</label><input class="e" id="smName" value="${esc(s.vonName || "")}"></div></div>
+    <button class="knopf pri" style="margin-top:12px" data-smtp>Speichern</button> <span class="mut klein">Passwörter werden AES-256-GCM verschlüsselt gespeichert und nie angezeigt.</span></div>
+  <div class="karte"><h3>Betrieb</h3>
+    <div class="zeile zw"><span>Demo-Modus</span>${m.politik.demo ? '<span class="chip warn">an</span>' : '<span class="chip ok">aus · echter Betrieb</span>'}</div>
+    <div class="zeile zw" style="margin-top:8px"><span>Aktionen nach aussen ohne Freigabe</span>${m.politik.externAutonom ? '<span class="chip err">erlaubt</span>' : '<span class="chip ok">gesperrt</span>'}</div>
+    ${S.ich.rolle === "admin" ? `<div class="zeile" style="margin-top:12px"><button class="knopf" data-politik="demo">${m.politik.demo ? "Demo-Modus beenden" : "Demo-Modus an"}</button><button class="knopf" data-politik="extern">${m.politik.externAutonom ? "Aussen-Aktionen wieder sperren" : "Aussen-Aktionen autonom erlauben"}</button></div><div class="hinweis rot" style="margin-top:10px">„Aussen-Aktionen autonom“ nur mit schriftlicher Zustimmung des Kunden. Senden von E-Mails braucht trotzdem immer eine Freigabe.</div>` : ""}
+    <h3 style="margin-top:20px">Datenschutz</h3><div class="mut klein">Export enthält alle Daten dieses Kunden (Agenten, Office, Aufträge, Audit). Löschen entfernt alles endgültig (nur Betreiber).</div>
+    <div class="zeile" style="margin-top:10px"><button class="knopf" data-export>⇩ Alle Daten exportieren</button>${S.ich.rolle === "admin" ? '<button class="knopf gefahr" data-mloeschen>Kunde endgültig löschen</button>' : ""}</div></div></div>`;
+};
+
+SEITE.mandanten = async () => {
+  S.auto = 0;
+  if (S.ich.rolle !== "admin") return kopf("Kein Zugriff");
+  S.mandanten = (await api("/mandanten")).mandanten;
+  return kopf("Kunden", "Pilotkunden ohne Code einrichten. Jeder Kunde ist strikt getrennt.", `<button class="knopf gefahr voll" id="notausAn">⛔ NOTAUS</button>`) +
+  `<div class="raster" style="grid-template-columns:minmax(0,3fr) minmax(0,2fr)"><div class="karte"><h3>Alle Kunden</h3>${S.mandanten.length ? `<table class="t mobil"><thead><tr><th>Kunde</th><th>Modus</th><th>Aktiv</th><th>Freigaben</th><th>Seit</th></tr></thead><tbody>${S.mandanten.map((m) => `<tr class="klick" data-tidwahl="${m.id}"><td><b>${esc(m.name)}</b><div class="mono klein mut">${esc(m.id)}</div></td><td>${m.politik.demo ? '<span class="chip warn">Demo</span>' : '<span class="chip ok">Live</span>'}</td><td>${m.aktiv}</td><td>${m.offeneFreigaben}</td><td class="mono klein">${zeit(m.erstellt)}</td></tr>`).join("")}</tbody></table>` : '<div class="leer">Noch keine Kunden.</div>'}</div>
+  <div class="karte"><h3>Neuer Pilotkunde</h3>
+    <label class="f">Firmenname</label><input class="e" id="nmName" placeholder="Treuhand Muster GmbH">
+    <label class="f">Branche</label><input class="e" id="nmBranche" placeholder="Treuhand">
+    <label class="f">Kontakt</label><input class="e" id="nmKontakt" placeholder="Name, Telefon">
+    <label class="f">Agenten-Team</label><div class="wahl" id="nmVorlagen">${S.katalog.vorlagen.map((v) => `<button data-nmv="${v}" class="${v === "office" ? "an" : ""}">${esc(v)}</button>`).join("")}</div>
+    <label class="f">Start</label><select class="e" id="nmDemo"><option value="1">Demo-Modus mit künstlichen Beispieldaten</option><option value="0">Echter Betrieb (leer)</option></select>
+    <button class="knopf pri" style="margin-top:14px;width:100%" data-mneu>Kunde anlegen</button>
+    <div class="mut klein" style="margin-top:8px">Der Kunde bekommt einen eigenen Zugang (Token) für die Zentrale. Das Token wird nur einmal angezeigt.</div></div></div>`;
+};
+
+/* ================= Dialoge ================= */
+function modal(html) { const d = document.createElement("div"); d.className = "modal"; d.innerHTML = `<div class="in">${html}</div>`; d.addEventListener("click", (e) => { if (e.target === d || e.target.closest("[data-zu]")) d.remove(); }); document.body.appendChild(d); return d; }
+async function neuerAuftrag(agentId) {
+  const a = (await mApi("/agenten")).agenten;
+  if (!a.length) return toast("Erst einen Agenten erstellen", true);
+  const d = modal(`<h2 style="margin-top:0">Neuer Auftrag</h2>
+    <label class="f">Agent</label><select class="e" id="naAgent">${a.map((x) => `<option value="${x.id}" ${x.id === agentId ? "selected" : ""}>${esc(x.name)} · ${esc(x.rolle)}</option>`).join("")}</select>
+    <label class="f">Ziel</label><textarea class="e" id="naZiel" placeholder="z.B. Erstelle eine Website für einen Coiffeursalon mit Leistungen, Preisen und Termin-Button" style="min-height:120px"></textarea>
+    <label class="f">Zeitbudget</label><div class="wahl" id="naStd">${[0.25, 0.5, 1, 2, 4, 8].map((h) => `<button data-h="${h}" class="${h === 1 ? "an" : ""}">${h < 1 ? h * 60 + " min" : h + " h"}</button>`).join("")}</div>
+    <label class="f">Projekt (optional, um an bestehendem Projekt weiterzuarbeiten)</label><input class="e" id="naProjekt" placeholder="leer = neues Projekt">
+    <div class="hinweis cy" style="margin-top:12px">Der Agent plant selbst, arbeitet mit echten Werkzeugen und hält sich an seine Rechte. Du kannst jederzeit stoppen.</div>
+    <div class="zeile" style="margin-top:14px;justify-content:flex-end"><button class="knopf" data-zu>Abbrechen</button><button class="knopf pri" id="naStart">▶ Starten</button></div>`);
+  let h = 1;
+  d.querySelectorAll("[data-h]").forEach((b) => b.onclick = () => { h = +b.dataset.h; d.querySelectorAll("[data-h]").forEach((x) => x.classList.toggle("an", x === b)); });
+  $("#naStart", d).onclick = async () => {
+    try { const r = await mApi("/laeufe", { agentId: $("#naAgent", d).value, ziel: $("#naZiel", d).value, stunden: h, projekt: $("#naProjekt", d).value.trim() || undefined }); d.remove(); toast("Auftrag gestartet"); geh("auftraege", { laufId: r.lauf.id }); }
+    catch (e) { toast(e.message, true); }
+  };
+}
+
+/* ================= Ereignisse ================= */
+function binde() {
+  const root = $("#root");
+  root.onclick = async (ev) => {
+    const t = ev.target.closest("button,[data-seite],[data-lauf],[data-agent],[data-mail],[data-datei],[data-dok],[data-tidwahl],a#abmelden");
+    if (!t) return;
+    const d = t.dataset;
+    try {
+      if (t.id === "abmelden") { ev.preventDefault(); try { localStorage.removeItem("nx:zentrale:token"); } catch (e) {} location.reload(); return; }
+      if (t.id === "notausAn") { if (confirm("NOTAUS: Alle Agenten aller Kunden sofort stoppen und neue Aufträge sperren?")) { await api("/notaus", { an: true }); await laden(); zeichne(); } return; }
+      if (t.id === "notausAus") { await api("/notaus", { an: false }); await laden(); zeichne(); return; }
+      if (d.seite) return geh(d.seite, { laufId: "", agentId: "", tab: "" });
+      if (d.lauf) return geh("auftraege", { laufId: d.lauf });
+      if (d.agent) return geh("agenten", { agentId: d.agent, tab: "" });
+      if (d.tidwahl) { S.tid = d.tidwahl; merkeUi(); await laden(); return geh("uebersicht"); }
+      if ("neuagent" in d) { ENTWURF = null; return geh("agenten", { agentId: "neu", tab: "" }); }
+      if ("neuauftrag" in d) return neuerAuftrag(d.neuauftrag);
+      if ("zurueck" in d) { ENTWURF = null; return geh(S.seite, { laufId: "", agentId: "" }); }
+      if ("stoppalle" in d) { if (confirm("Alle laufenden Aufträge dieses Kunden stoppen?")) { const r = await mApi("/stopp-alle", {}); toast(r.gestoppt + " gestoppt"); zeichne(); } return; }
+      if (d.stopp) { await mApi("/laeufe/" + d.stopp + "/stopp", {}); toast("Gestoppt"); return zeichne(); }
+      if (d.tab) { S.tab = d.tab; return zeichne(); }
+      if (d.fr) { const antwort = ($("#frAntwort") || {}).value, notiz = ($("#frNotiz") || {}).value; await mApi("/laeufe/" + d.frlauf + "/freigabe", { entscheid: d.fr, id: d.frid, antwort, notiz }); toast(d.fr === "ja" ? "Freigegeben" : "Abgelehnt"); await laden(); return zeichne(); }
+      if (d.esenden) { const r = await mApi("/office/entwurf/" + d.esenden + "/senden", { text: $(`[data-etext="${d.esenden}"]`).value, betreff: $(`[data-ebetreff="${d.esenden}"]`).value }); toast(r.kanal === "demo" ? "Demo: protokolliert, nicht versendet" : "Gesendet an " + r.an); await laden(); return zeichne(); }
+      if (d.everwerfen) { await mApi("/office/entwurf/" + d.everwerfen + "/verwerfen", {}); toast("Verworfen"); await laden(); return zeichne(); }
+      if ("demo" in d) { const r = await mApi("/office/demo", {}); toast(r.mails + " Demo-Mails geladen"); return zeichne(); }
+      if (d.officelauf) { const r = await mApi("/laeufe", { agentId: d.officelauf, ziel: "Arbeite den Posteingang ab: lies jede neue Mail, ordne sie ein (Kategorie, Prioritaet, Zusammenfassung), lege fuer Handlungsbedarf Aufgaben an und entwirf passende Antworten. Spam nicht beantworten. Nichts selbst senden – Entwuerfe gehen ins Freigabe-Center.", stunden: 0.5 }); return geh("auftraege", { laufId: r.lauf.id }); }
+      if (d.officebericht) { const r = await mApi("/laeufe", { agentId: d.officebericht, ziel: "Erstelle einen Aktivitaetsbericht der letzten 7 Tage als Dokument (Ordner Berichte): Kennzahlen, wichtigste Anfragen, offene Aufgaben, Empfehlungen.", stunden: 0.25 }); return geh("auftraege", { laufId: r.lauf.id }); }
+      if (d.mail) { const o = await mApi("/office"); const m = o.posteingang.find((x) => x.id === d.mail); modal(`<h2 style="margin-top:0">${esc(m.betreff)}</h2><div class="mut">Von ${esc(m.von)} · ${zeit(m.datum)}</div>${m.zusammenfassung ? `<div class="hinweis cy" style="margin:10px 0">${esc(m.zusammenfassung)}</div>` : ""}<div class="mailtext" style="margin-top:10px">${esc(m.text)}</div><div style="text-align:right;margin-top:12px"><button class="knopf" data-zu>Schliessen</button></div>`); return; }
+      if ("mailneu" in d) { const md = modal(`<h2 style="margin-top:0">Anfrage erfassen</h2><label class="f">Von (E-Mail)</label><input class="e" id="mnVon"><label class="f">Betreff</label><input class="e" id="mnBetreff"><label class="f">Text</label><textarea class="e" id="mnText"></textarea><div class="zeile" style="justify-content:flex-end;margin-top:12px"><button class="knopf" data-zu>Abbrechen</button><button class="knopf pri" id="mnOk">Erfassen</button></div>`); $("#mnOk", md).onclick = async () => { try { await mApi("/office/eingang", { von: $("#mnVon", md).value, betreff: $("#mnBetreff", md).value, text: $("#mnText", md).value, quelle: "manuell" }); md.remove(); zeichne(); } catch (e) { toast(e.message, true); } }; return; }
+      if (d.datei) { const r = await mApi("/datei?projekt=" + encodeURIComponent(d.dprojekt) + "&pfad=" + encodeURIComponent(d.datei)); $("#dateititel").textContent = d.datei; $("#dateiinhalt").textContent = r.inhalt; return; }
+      if (d.projekt) return geh("dateien", { projekt: d.projekt });
+      if (d.dok) { const r = await mApi("/dokument?pfad=" + encodeURIComponent(d.dok)); modal(`<h2 style="margin-top:0">${esc(d.dok)}</h2><pre class="code" style="max-height:65vh">${esc(r.inhalt)}</pre><div style="text-align:right;margin-top:12px"><button class="knopf" data-zu>Schliessen</button></div>`); return; }
+      if ("export" in d) { const r = await mApi("/export"); const b = new Blob([JSON.stringify(r, null, 1)], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "nemesis-" + S.tid + "-" + new Date().toISOString().slice(0, 10) + ".json"; a.click(); return; }
+      if ("mloeschen" in d) { const x = prompt("Endgültig löschen. Zur Bestätigung die Kunden-ID eingeben: " + S.tid); if (x) { await mApi("/loeschen", { bestaetigung: x }); toast("Gelöscht"); S.tid = ""; await laden(); geh("mandanten"); } return; }
+      if (d.politik) { const m = S.daten.uebersicht.mandant; const p = d.politik === "demo" ? { demo: !m.politik.demo } : { externAutonom: !m.politik.externAutonom }; if (d.politik === "extern" && !m.politik.externAutonom && !confirm("Wirklich erlauben, dass Agenten ohne Freigabe nach aussen handeln?")) return; await mApi("/einstellungen", { politik: p }); await laden(); return zeichne(); }
+      if ("smtp" in d) { await mApi("/smtp", { smtp: { host: $("#smHost").value, port: +$("#smPort").value, benutzer: $("#smUser").value, passwort: $("#smPw").value || undefined, von: $("#smVon").value, vonName: $("#smName").value } }); toast("SMTP gespeichert"); await laden(); return zeichne(); }
+      if ("limitsspeichern" in d) { const l = {}; document.querySelectorAll("[data-mlimit]").forEach((i) => l[i.dataset.mlimit] = +i.value); await mApi("/einstellungen", { limits: l }); toast("Limits gespeichert"); return zeichne(); }
+      if (d.nmv) { t.classList.toggle("an"); return; }
+      if ("mneu" in d) {
+        const r = await api("/mandanten", { name: $("#nmName").value, branche: $("#nmBranche").value, kontakt: $("#nmKontakt").value, demo: $("#nmDemo").value === "1", agenten: [...document.querySelectorAll("#nmVorlagen .an")].map((b) => b.dataset.nmv) });
+        S.tid = r.mandant.id; merkeUi(); await laden();
+        const link = location.origin + "/zentrale";
+        modal(`<h2 style="margin-top:0">✓ ${esc(r.mandant.name)} angelegt</h2><p class="mut">Zugang für den Kunden (wird nur jetzt angezeigt):</p><label class="f">Link</label><pre class="code">${esc(link)}</pre><label class="f">Zugangs-Token</label><pre class="code">${esc(r.token)}</pre><div class="hinweis">Sicher übergeben (nicht per unverschlüsselter Mail). Neues Token jederzeit unter Einstellungen erzeugbar.</div><div style="text-align:right;margin-top:12px"><button class="knopf pri" data-zu>Verstanden</button></div>`);
+        return zeichne();
+      }
+      // --- Avatar Studio ---
+      if (d.vorlage) { const v = S.katalog.vorlagenDaten && S.katalog.vorlagenDaten[d.vorlage]; Object.assign(ENTWURF, JSON.parse(JSON.stringify(v || {})), { _id: "neu" }); return zeichne(); }
+      if (d.av) { ENTWURF.avatar[d.av] = ["frisur", "haut"].includes(d.av) ? +d.wert : d.wert; return zeichne(); }
+      if (d.alle) { for (const w of S.katalog.werkzeuge) ENTWURF.werkzeuge[w.name] = d.alle; return zeichne(); }
+      if ("wissenneu" in d) { ENTWURF.wissen.push({ titel: "", text: "" }); return zeichne(); }
+      if (d.wissenweg) { ENTWURF.wissen.splice(+d.wissenweg, 1); return zeichne(); }
+      if (d.team) { const tm = ENTWURF.team = ENTWURF.team || []; const i = tm.indexOf(d.team); i >= 0 ? tm.splice(i, 1) : tm.push(d.team); return zeichne(); }
+      if ("speichern" in d) { const { _id, ...b } = ENTWURF; const r = await mApi("/agenten", b); ENTWURF = null; toast("Gespeichert"); await laden(); return geh("agenten", { agentId: r.agent.id }); }
+      if ("agentweg" in d) { if (confirm("Agent " + ENTWURF.name + " löschen?")) { await mApi("/agenten/" + ENTWURF.id + "/loeschen", {}); ENTWURF = null; await laden(); geh("agenten", { agentId: "" }); } return; }
+    } catch (e) { toast(e.message, true); }
+  };
+  root.oninput = (ev) => {
+    const t = ev.target, d = t.dataset;
+    if (!ENTWURF) return;
+    if (d.feld) { ENTWURF[d.feld] = d.feld === "autonomie" ? +t.value : t.value; if (d.feld === "name") { $("#avatarbuehne").innerHTML = avatarSvg(ENTWURF.avatar, t.value || "?", 220); $("#avnm").textContent = t.value || "Neuer Agent"; } }
+    if (d.p) ENTWURF.persoenlichkeit[d.p] = d.p === "eigenschaften" ? t.value.split(",").map((x) => x.trim()).filter(Boolean) : t.value;
+    if (d.wissen) ENTWURF.wissen[+d.wissen][d.wf] = t.value;
+    if (d.limit) ENTWURF.limits[d.limit] = +t.value;
+  };
+  root.onchange = async (ev) => {
+    const t = ev.target, d = t.dataset;
+    if (t.id === "tidwahl") { S.tid = t.value; merkeUi(); await laden(); return zeichne(); }
+    if (t.id === "projektwahl") { S.projekt = t.value; return zeichne(); }
+    if (d.recht && ENTWURF) { ENTWURF.werkzeuge[d.recht] = t.value; }
+    if (d.feld === "autonomie") zeichne();
+  };
+}
+
+/* ================= Start ================= */
+async function start() {
+  try {
+    S.ich = await api("/ich");
+  } catch (e) {
+    if (e.status === 401) return loginSeite();
+    $("#root").innerHTML = `<div class="login"><div class="hinweis rot">${esc(e.message)}</div></div>`; return;
+  }
+  S.katalog = await api("/katalog");
+  await laden();
+  zeichne();
+}
+function loginSeite(fehler) {
+  $("#root").innerHTML = `<div class="login"><div class="marke" style="justify-content:center;font-size:20px"><svg width="40" height="40" viewBox="0 0 64 64"><path d="M32 6 L58 32 L32 58 L6 32 Z" fill="none" stroke="#FF2D78" stroke-width="5"/><path d="M32 20 L44 32 L32 44 L20 32 Z" fill="#22E0FF"/></svg><div>NEMESIS<small>ZENTRALE</small></div></div>
+  <div class="karte"><h3>Anmelden</h3><p class="mut klein">Gib dein Zugangs-Token ein. Du hast es von deinem Nemesis-Betreuer erhalten.</p>${fehler ? `<div class="hinweis rot">${esc(fehler)}</div>` : ""}
+  <input class="e" id="tok" type="password" placeholder="nxm_…" autocomplete="current-password"><button class="knopf pri" style="width:100%;margin-top:12px" id="tokOk">Anmelden</button></div></div>`;
+  const go = async () => { TOKEN = $("#tok").value.trim(); try { localStorage.setItem("nx:zentrale:token", TOKEN); } catch (e) {} try { await start(); } catch (e) { loginSeite(e.message); } };
+  $("#tokOk").onclick = go; $("#tok").onkeydown = (e) => { if (e.key === "Enter") go(); };
+}
+start();
+</script>
+</body>
+</html>
