@@ -2901,6 +2901,7 @@ Antworte NUR mit JSON.
 /* ---------------- WERKSTATT ---------------- */
 
 const TOOLS = [
+  { id: "zentrale", n: "NEMESIS Zentrale ⭐", d: "Handlungsfähige Agenten mit echten Werkzeugen, Rechten pro Werkzeug, Freigabe-Center, Live-Monitor, NEMESIS Office und Kundenverwaltung. Öffnet die Zentrale.", ic: "◆" },
   { id: "gastro", n: "Gastro-Agent", d: "KI-Mitarbeiter für Restaurants: kennt Konzept, Karte, Bestand und Reservierungen, empfiehlt Gerichte aus Resten und nimmt Reservierungen an. Dein erstes Verkaufsprodukt.", ic: "❖" },
   { id: "kunden", n: "Kunden & Abos", d: "Alle Kunden-Betriebe: Test, Zahlung, Sperre. Zahlungslink per WhatsApp schicken, Umsatz sehen. Hier kassierst du.", ic: "💶" },
   { id: "breed", n: "Zuchtkammer", d: "Zwei Agenten zeugen ein Kind mit gemischtem Erbgut und eigener Generation.", ic: "⧗" },
@@ -2955,7 +2956,7 @@ function Workshop(ctx) {
     <>
       <span className="lbl">Werkbank</span>
       {TOOLS.map((t) => (
-        <button key={t.id} className={"card tool" + (t.danger ? " danger" : "")} onClick={() => setTool(t.id)}>
+        <button key={t.id} className={"card tool" + (t.danger ? " danger" : "")} onClick={() => t.id === "zentrale" ? (window.location.href = "zentrale") : setTool(t.id)}>
           <div className="row">
             <div style={{ fontSize: 20, color: t.danger ? "var(--mag)" : "var(--cyan)", flex: "0 0 24px", textAlign: "center" }}>{t.ic}</div>
             <div>

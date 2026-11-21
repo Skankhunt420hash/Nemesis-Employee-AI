@@ -1038,9 +1038,15 @@ function createEngine(opt) {
 
   function freigabenListe(tid) {
     const out = [];
-    for (const k of laeufeListe(tid).filter((x) => x.status === "wartet_freigabe")) { const l = laufLaden(tid, k.id); if (l.freigabe) out.push(Object.assign({ lauf: l.id, agent: l.agentName, ziel: kurz(l.ziel, 200) }, l.freigabe)); }
-    const o = _office(tid);
-    for (const e of o.entwuerfe.filter((x) => x.status === "entwurf")) out.push({ art: "entwurf", id: e.id, agent: e.von, an: e.an, betreff: e.betreff, text: e.text, erstellt: e.erstellt });
+    const o = _office(tid), inLauf = new Set();
+    for (const k of laeufeListe(tid).filter((x) => x.status === "wartet_freigabe")) {
+      const l = laufLaden(tid, k.id); if (!l.freigabe) continue;
+      const f = Object.assign({ lauf: l.id, agent: l.agentName, ziel: kurz(l.ziel, 200) }, l.freigabe, { antwort: undefined });
+      // Der Mensch soll sehen, WAS gesendet wird, nicht nur eine ID
+      if (f.werkzeug === "antwort_senden" && f.args) { const e = o.entwuerfe.find((x) => x.id === f.args.entwurfId); if (e) { f.mail = { an: e.an, betreff: e.betreff, text: e.text }; inLauf.add(e.id); } }
+      out.push(f);
+    }
+    for (const e of o.entwuerfe.filter((x) => x.status === "entwurf" && !inLauf.has(x.id))) out.push({ art: "entwurf", id: e.id, agent: e.von, an: e.an, betreff: e.betreff, text: e.text, erstellt: e.erstellt });
     return out;
   }
   function freigabeEntscheiden(tid, laufId, b, akteur) {

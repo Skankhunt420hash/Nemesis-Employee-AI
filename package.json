@@ -1,0 +1,10 @@
+{
+  "name": "nemesis-employee-ai",
+  "private": true,
+  "description": "Nemesis Lab + Zentrale (handlungsfaehige Agenten). Keine Laufzeit-Abhaengigkeiten.",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-timeout=600000 tests/*.test.js",
+    "build": "bash build/build.sh"
+  },
+  "engines": { "node": ">=18" }
+}

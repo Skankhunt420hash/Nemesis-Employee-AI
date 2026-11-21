@@ -25,3 +25,16 @@ def einsetzen(datei, vorlage):
 einsetzen(js, "const APP_LAUFZEIT = " + json.dumps(lz, ensure_ascii=False) + ";")
 einsetzen(os.path.join(r, "app", "nemesis-app.html"), "const LAUFZEIT_SRC = " + json.dumps(lz.replace("</", "<\\/"), ensure_ascii=False) + ";")
 print("Laufzeit eingebettet:", len(lz), "Bytes")
+
+# Agenten-Zentrale (app/agenten/) in nemesis-app.js einbetten
+ad = os.path.join(r, "app", "agenten")
+import hashlib
+quellen = {n: open(os.path.join(ad, d), encoding="utf8").read() for n, d in [("engine", "engine.js"), ("http", "http.js"), ("html", "zentrale.html")]}
+quellen["version"] = hashlib.sha256("".join(quellen[k] for k in ["engine", "http", "html"]).encode()).hexdigest()[:12]
+t = open(js, encoding="utf8").read()
+if "/*AGENTEN-START*/" not in t:
+    sys.exit("AGENTEN-Marker fehlt")
+blk = "/*AGENTEN-START*/\nconst AGENTEN_SRC = " + json.dumps(quellen, ensure_ascii=False) + ";\n/*AGENTEN-ENDE*/"
+t = re.sub(r"/\*AGENTEN-START\*/.*?/\*AGENTEN-ENDE\*/", lambda m: blk, t, flags=re.S)
+open(js, "w", encoding="utf8").write(t)
+print("Agenten-Zentrale eingebettet:", len(blk), "Bytes, Version", quellen["version"])
