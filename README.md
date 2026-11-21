@@ -2,6 +2,13 @@
 
 Nemesis Lab (Agent-Generator-App) + Backend auf dem Droplet.
 
+## NEMESIS Zentrale: handlungsfähige Agenten (neu)
+Agenten mit echten Werkzeugen (Dateien, Docker-Sandbox für Build/Test/Git, Web, Office, OpenClaw-Browser), Rechten pro Werkzeug, Freigabe-Center, Live-Monitor, Notaus, Audit-Log, Kunden (Mandanten) und NEMESIS Office.
+- Betreiber: `/k/<Zugang>/zentrale`, Kunde: `/zentrale` mit Token
+- Doku: [`docs/ZENTRALE.md`](docs/ZENTRALE.md), Audit: [`docs/AUDIT.md`](docs/AUDIT.md), Tests: [`docs/TESTBERICHT.md`](docs/TESTBERICHT.md)
+- Tests: `npm test` · Bauen: `npm run build`
+- **Achtung:** Der Server aktualisiert sich alle 30 Minuten selbst von `main`. Ein Merge auf `main` ist ein Deploy.
+
 ## Installieren / Aktualisieren (DigitalOcean-Konsole, eine Zeile)
 
 ```
