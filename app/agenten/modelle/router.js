@@ -6,7 +6,7 @@
    - Standard ist Free-only. Erlaubt sind nur Modelle der Klasse
        "gratis-verifiziert"  (Anbieter-API meldet Preis 0, oder OpenRouter-Kennzeichnung ":free")
        "gratis-bestaetigt"   (Admin hat fuer diesen Anbieter/dieses Konto bestaetigt: API-Kosten 0)
-     "gratis-annahme" (alte statische Annahme) ist NICHT erlaubt, bis der Admin bestaetigt.
+       "gratis-stufe"        (Gratis-Stufe des Anbieters, z.B. Groq/Gemini/Mistral) - standardmaessig AN, abschaltbar
    - Ein vorhandener API-Schluessel ist KEINE Kostenfreigabe.
    - Kostenpflichtige Modelle nur wenn (a) der Admin sie freigegeben hat (Muster + Tagesbudget),
      (b) der Aufruf sie AUSDRUECKLICH verlangt (Agent-/Benutzerwahl) – nie als automatischer Fallback,
@@ -53,7 +53,7 @@ const FAEHIGKEITEN = [
 ];
 function faehigkeiten(id) { for (const [re, f] of FAEHIGKEITEN) if (re.test(id)) return Object.assign({ quelle: "Familie (Annahme)" }, f); return { json: null, tools: null, vision: null, kontext: null, quelle: "unbekannt" }; }
 
-const KLASSEN = { "gratis-verifiziert": "Gratis (vom Anbieter bestaetigt)", "gratis-bestaetigt": "Gratis (vom Admin bestaetigt)", "gratis-annahme": "Gratis nur angenommen – gesperrt bis bestaetigt", "kostenpflichtig": "Kostenpflichtig", "unbekannt": "Unbekannt – gesperrt" };
+const KLASSEN = { "gratis-verifiziert": "Gratis (vom Anbieter bestaetigt)", "gratis-bestaetigt": "Gratis (vom Admin bestaetigt)", "gratis-stufe": "Gratis-Stufe des Anbieters (aktiv, abschaltbar)", "kostenpflichtig": "Kostenpflichtig", "unbekannt": "Unbekannt – gesperrt" };
 
 const tag = () => new Date().toISOString().slice(0, 10);
 const kurz = (s, n) => String(s == null ? "" : s).slice(0, n);
@@ -62,7 +62,7 @@ function createRouter(opt) {
   opt = opt || {};
   const datei = opt.datei;
   const jetzt = opt.jetzt || (() => Date.now());
-  const leer = { modus: "nur-gratis", bestaetigt: {}, freigaben: [], limits: {}, verifiziert: {}, verbrauch: { tag: tag(), anbieter: {}, kostenChf: {} }, protokoll: [] };
+  const leer = { modus: "nur-gratis", bestaetigt: {}, deaktiviert: {}, freigaben: [], limits: {}, verifiziert: {}, verbrauch: { tag: tag(), anbieter: {}, kostenChf: {} }, protokoll: [] };
   let K = leer;
   try { if (datei) K = Object.assign({}, leer, JSON.parse(fs.readFileSync(datei, "utf8"))); } catch (e) {}
   const minute = new Map(); // anbieter -> [zeitpunkte]
@@ -86,10 +86,11 @@ function createRouter(opt) {
       if (v && Array.isArray(v.gratis) && v.gratis.includes(modell)) return "gratis-verifiziert";
       if (v && Array.isArray(v.bezahlt) && v.bezahlt.includes(modell)) return "kostenpflichtig";
       if (anbieter === "openrouter" && A.gratisMuster.test(modell)) return "gratis-verifiziert"; // OpenRouter-Kennzeichnung ":free"
-      if (A.gratisMuster && A.gratisMuster.test(modell)) return K.bestaetigt[anbieter] ? "gratis-bestaetigt" : "gratis-annahme";
+      if (A.gratisMuster && A.gratisMuster.test(modell)) return K.bestaetigt[anbieter] ? "gratis-bestaetigt" : "gratis-stufe";
       return "kostenpflichtig";
     }
-    return K.bestaetigt[anbieter] ? "gratis-bestaetigt" : "gratis-annahme";
+    // Gratis-Stufe des Anbieters: standardmaessig AN (App muss nach einem Update weiterlaufen). Admin kann abschalten.
+    return K.bestaetigt[anbieter] ? "gratis-bestaetigt" : "gratis-stufe";
   }
   function freigabeFuer(anbieter, modell) {
     const n = jetzt();
@@ -108,8 +109,10 @@ function createRouter(opt) {
       if (!ctx.explizit) return { ok: false, code: "KEIN_AUTO_BEZAHLT", grund: "Kostenpflichtige Modelle werden nie automatisch als Fallback genutzt", klasse: k };
       const v = verbrauch(); const schon = v.kostenChf[fr.id] || 0;
       if (schon >= fr.budgetChfTag) return { ok: false, code: "BUDGET", grund: "Tagesbudget CHF " + fr.budgetChfTag + " fuer " + fr.muster + " erreicht", klasse: k, wiederAb: morgen() };
-    } else if (k !== "gratis-verifiziert" && k !== "gratis-bestaetigt") {
-      return { ok: false, code: "NICHT_BESTAETIGT", grund: (ANBIETER[anbieter] || { name: anbieter }).name + ": Gratisnutzung nicht bestaetigt", klasse: k };
+    } else if (!["gratis-verifiziert", "gratis-bestaetigt", "gratis-stufe"].includes(k)) {
+      return { ok: false, code: "NICHT_BESTAETIGT", grund: (ANBIETER[anbieter] || { name: anbieter }).name + ": unbekannte Kosten", klasse: k };
+    } else if ((K.deaktiviert || {})[anbieter]) {
+      return { ok: false, code: "DEAKTIVIERT", grund: (ANBIETER[anbieter] || {}).name + " vom Admin abgeschaltet", klasse: k };
     } else if (K.modus === "aus") {
       return { ok: false, code: "AUS", grund: "Modellzugang vom Admin ausgeschaltet", klasse: k };
     }
@@ -166,6 +169,11 @@ function createRouter(opt) {
         protokoll(akteur, "bestaetigung", { anbieter: x.anbieter, notiz: kurz(x.notiz, 300) });
       }
     }
+    if (b.schalten && ANBIETER[b.schalten.anbieter]) {
+      K.deaktiviert = K.deaktiviert || {};
+      if (b.schalten.aus) K.deaktiviert[b.schalten.anbieter] = { von: akteur, am: new Date(jetzt()).toISOString() }; else delete K.deaktiviert[b.schalten.anbieter];
+      protokoll(akteur, b.schalten.aus ? "anbieter.aus" : "anbieter.an", { anbieter: b.schalten.anbieter });
+    }
     if (b.freigabe) {
       const f = b.freigabe;
       if (f.entfernen) { K.freigaben = K.freigaben.filter((x) => x.id !== f.entfernen); protokoll(akteur, "freigabe.entfernt", { id: f.entfernen }); }
@@ -214,7 +222,7 @@ function createRouter(opt) {
       modus: K.modus, klassen: KLASSEN,
       anbieter: Object.entries(ANBIETER).map(([id, A]) => ({
         id, name: A.name, kosten: A.kosten, hinweis: A.hinweis, schluessel: schluesselDa ? !!schluesselDa(id) : null,
-        bestaetigt: K.bestaetigt[id] || null, limits: limitsVon(id), verbrauch: v.anbieter[id] || { anfragen: 0, ok: 0, fehler: 0, tokens: 0 },
+        bestaetigt: K.bestaetigt[id] || null, aus: !!(K.deaktiviert || {})[id], limits: limitsVon(id), verbrauch: v.anbieter[id] || { anfragen: 0, ok: 0, fehler: 0, tokens: 0 },
         pauseBis: pausen[id] > jetzt() ? new Date(pausen[id]).toISOString() : null,
         verifiziert: K.verifiziert[id] ? { zeit: K.verifiziert[id].zeit, gratis: K.verifiziert[id].gratis.length } : null,
         preisPruefung: !!A.preisPruefung,
@@ -225,7 +233,7 @@ function createRouter(opt) {
   }
 
   return { pruefe, klasse, kontingent, vorAufruf, nachAufruf, naechsteFreigabe, setze, verifiziere, status, faehigkeiten,
-    erlaubtAnbieter: (a, ctx) => { const k = ANBIETER[a]; if (!k) return false; if (k.kosten === "bezahlt") return !!(K.freigaben || []).find((f) => f.anbieter === a) && !!(ctx && ctx.explizit); return k.kosten === "pro-modell" ? true : !!K.bestaetigt[a]; },
+    erlaubtAnbieter: (a, ctx) => { const k = ANBIETER[a]; if (!k) return false; if (k.kosten === "bezahlt") return !!(K.freigaben || []).find((f) => f.anbieter === a) && !!(ctx && ctx.explizit); return !(K.deaktiviert || {})[a]; },
     get konfig() { return JSON.parse(JSON.stringify(K)); } };
 }
 

@@ -15,6 +15,7 @@ Eine Phase ist erst COMPLETED, wenn ihre Abschlusstests tatsächlich bestanden s
 | 7 | Real AI Training Lab | NOT STARTED (voraussichtlich BLOCKED) | Echter Adapter trainiert und unabhängig bewertet | Keine GPU, kein torch in der Entwicklungsumgebung |
 | 8 | Agent & Tool Marketplace | NOT STARTED | Zwei Demo-Kunden mit getrennten Agenten und Lizenzen; unberechtigte Zugriffe scheitern | Mandantentrennung der Zentrale ist getestet (Vorarbeit) |
 | 9 | Kommerzielle Produktionsreife | NOT STARTED | Pilot vorbereitet, keine automatische Liveschaltung | – |
+| 10 | Free-Modell-Bibliothek & Erweiterung | NOT STARTED | Bibliothek aller Gratis-Modelle (auswählbar pro Agent), viele zusätzliche Gratis-Anbieter, Rotation über alle | Wunsch 22.11.2026 |
 
 ## Phase 1: Abschlussbericht (22.11.2026)
 
@@ -36,7 +37,8 @@ Eine Phase ist erst COMPLETED, wenn ihre Abschlusstests tatsächlich bestanden s
 - Die Kosten bezahlter Modelle werden aus Tokens geschätzt (Zeichen/4 × Preis aus der Freigabe), nicht vom Anbieter abgerechnet.
 - Die Claude-Kosten im Kunden-Chat zählen nicht gegen das Freigabe-Budget (die Freigabe wirkt dort nur als Ein/Aus).
 - Die Fähigkeiten pro Modell sind Familien-Annahmen.
-- **Wirkung nach dem Deploy (wichtig):** Groq, Gemini, Mistral, Cohere und NVIDIA sind nach dem Update **gesperrt**, bis der Admin unter Zentrale → Modelle & Kosten die Gratisnutzung bestätigt. Bis dahin funktionieren Lab, Telegram, Gast-Chat und Agenten nur über OpenRouter-`:free`-Modelle (falls ein Schlüssel da ist). Das ist gewollt (Kostenregel), muss beim Deploy aber sofort erledigt werden.
+- **Korrektur 22.11. (nach Rückmeldung):** Gratis-Anbieter (Groq, Gemini, Mistral, Cohere, NVIDIA, OpenRouter `:free`, Together-Gratismodelle) sind **standardmäßig aktiv** und rotieren automatisch; der Admin kann einzelne abschalten. Die App läuft nach einem Deploy ohne Zusatzschritt weiter. OpenAI ist aus allen automatischen Ketten entfernt; OpenAI und Claude laufen nur noch bei ausdrücklicher Wahl **und** Freigabe. Gemini-Hinweis bleibt: Ist im Google-Projekt Billing aktiv, kann derselbe Schlüssel Kosten erzeugen.
+- Verhaltensänderung: Der Kunden-Chat `/api/chat` nutzt ohne Anthropic-Freigabe die Gratis-Rotation statt Claude.
 
 ## Bekannte Fehler und Einschränkungen (Stand Phase 0)
 Siehe Masterplan §2 (S1–S14). Die wichtigsten offenen Punkte:

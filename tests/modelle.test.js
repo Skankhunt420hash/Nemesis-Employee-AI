@@ -51,9 +51,12 @@ test("Router: Kostenklassen und Gate (Einheit)", () => {
   const R = createRouter({});
   assert.strictEqual(R.klasse("openrouter", "x/y:free"), "gratis-verifiziert");
   assert.strictEqual(R.klasse("openrouter", "openai/gpt-4o"), "kostenpflichtig");
-  assert.strictEqual(R.klasse("groq", "llama"), "gratis-annahme");
+  assert.strictEqual(R.klasse("groq", "llama"), "gratis-stufe");
   assert.strictEqual(R.klasse("openai", "gpt-4o-mini"), "kostenpflichtig");
-  assert.strictEqual(R.pruefe("groq", "llama").code, "NICHT_BESTAETIGT", "Schluessel allein reicht nicht");
+  assert.strictEqual(R.pruefe("groq", "llama").ok, true, "Gratis-Anbieter sind standardmaessig aktiv");
+  R.setze({ schalten: { anbieter: "groq", aus: true } }, "admin");
+  assert.strictEqual(R.pruefe("groq", "llama").code, "DEAKTIVIERT");
+  R.setze({ schalten: { anbieter: "groq", aus: false } }, "admin");
   assert.strictEqual(R.pruefe("openai", "gpt-4o-mini", { explizit: true }).code, "NICHT_FREIGEGEBEN");
   assert.throws(() => R.setze({ bestaetigen: { anbieter: "groq", notiz: "ok" } }, "admin"), /mind. 10/);
   R.setze({ bestaetigen: { anbieter: "groq", notiz: "Free Tier, kein Zahlungsmittel hinterlegt" } }, "admin");
@@ -96,22 +99,31 @@ test("Router: Preis-Verifikation ueber die Modell-Liste (OpenRouter-Format)", as
 });
 
 /* ---------- Ende-zu-Ende ueber den echten Rotator ---------- */
-test("E2E: Gratis-Aufruf erfolgreich (nur verifizierte Gratis-Modelle, Groq unbestaetigt bleibt aus)", async () => {
+test("E2E: Gratis-Aufruf erfolgreich, OpenAI wird nie angefragt", async () => {
   nullen();
   const r = await frage();
   assert.strictEqual(r.status, 200, JSON.stringify(r.body));
-  assert.strictEqual(r.body.anbieter, "openrouter"); assert.match(r.body.modell, /:free$/); assert.strictEqual(r.body.frei, true);
-  assert.deepStrictEqual(treffer, { groq: 0, openai: 0, openrouter: 1 });
+  assert.strictEqual(r.body.anbieter, "groq"); assert.strictEqual(r.body.frei, true);
+  assert.deepStrictEqual(treffer, { groq: 1, openai: 0, openrouter: 0 });
 });
 
-test("E2E: Gratis erschoepft -> KEIN Fallback auf OpenAI, obwohl Schluessel vorhanden -> Kontingent-Fehler", async () => {
+test("E2E: Rotation - Groq leer (429) -> OpenRouter :free uebernimmt", async () => {
+  nullen(); verhalten.groq = "429";
+  const r = await frage();
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  assert.strictEqual(r.body.anbieter, "openrouter"); assert.match(r.body.modell, /:free$/);
+  assert.strictEqual(treffer.openai, 0);
+  nullen(); const r2 = await frage();
+  assert.strictEqual(r2.body.anbieter, "openrouter"); assert.strictEqual(treffer.groq, 0, "pausierter Anbieter wird uebersprungen");
+});
+
+test("E2E: Alle Gratis leer -> KEIN Fallback auf OpenAI, obwohl Schluessel vorhanden -> Kontingent-Fehler", async () => {
   nullen(); verhalten.openrouter = "429";
   const r = await frage();
   assert.strictEqual(r.status, 429, JSON.stringify(r.body));
   assert.strictEqual(r.body.code, "KONTINGENT_ERSCHOEPFT");
   assert.ok(r.body.wiederAb > Date.now());
   assert.strictEqual(treffer.openai, 0, "OpenAI wurde nie aufgerufen");
-  // Zweiter Aufruf: Anbieter ist pausiert, es wird gar nichts mehr versucht
   nullen(); const r2 = await frage();
   assert.strictEqual(r2.body.code, "KONTINGENT_ERSCHOEPFT"); assert.deepStrictEqual(treffer, { groq: 0, openai: 0, openrouter: 0 });
 });
@@ -126,18 +138,19 @@ test("E2E: Ausdruecklich gewaehltes Bezahlmodell ohne Freigabe wird verweigert (
   assert.strictEqual(r2.status, 403); assert.strictEqual(treffer.openai, 0);
 });
 
-test("E2E: Admin bestaetigt Groq -> Groq wird als Gratis-Fallback genutzt", async () => {
-  global.__nxApp.modellRouter.setze({ bestaetigen: { anbieter: "groq", notiz: "Groq Free Tier, kein Zahlungsmittel" } }, "admin");
+test("E2E: Admin schaltet einen Gratis-Anbieter ab -> er wird nicht mehr genutzt", async () => {
+  const R = global.__nxApp.modellRouter;
+  R.setze({ schalten: { anbieter: "openrouter", aus: true } }, "admin");
   nullen();
   const r = await frage();
-  assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.strictEqual(r.body.anbieter, "groq");
-  assert.strictEqual(treffer.openai, 0);
+  assert.notStrictEqual(r.body.anbieter, "openrouter"); assert.strictEqual(treffer.openrouter, 0); assert.strictEqual(treffer.openai, 0);
+  R.setze({ schalten: { anbieter: "openrouter", aus: false } }, "admin");
 });
 
 test("E2E: Bezahlmodell mit Freigabe nur bei ausdruecklicher Wahl, nie automatisch", async () => {
   const R = global.__nxApp.modellRouter;
   R.setze({ freigabe: { anbieter: "openai", muster: "gpt-5.5", budgetChfTag: 2, chfPro1MTokens: 10, bestaetigung: "Ich erlaube Kosten" } }, "admin");
-  verhalten.groq = "429";
+  verhalten.groq = "429"; verhalten.openrouter = "429";
   nullen();
   const auto = await frage();
   assert.strictEqual(auto.status, 429, "auto faellt NICHT auf das freigegebene Bezahlmodell"); assert.strictEqual(treffer.openai, 0);
@@ -165,7 +178,7 @@ test("Admin-API: nur Betreiber sieht und aendert Modelle; Kunde bekommt 403", as
   try {
     const st = await (await fetch(b + Z + "/zentrale/api/modelle")).json();
     assert.strictEqual(st.modelle.modus, "nur-gratis");
-    const gr = st.modelle.anbieter.find((a) => a.id === "groq"); assert.strictEqual(gr.schluessel, true); assert.ok(gr.bestaetigt);
+    const gr = st.modelle.anbieter.find((a) => a.id === "groq"); assert.strictEqual(gr.schluessel, true); assert.strictEqual(gr.aus, false);
     const oa = st.modelle.anbieter.find((a) => a.id === "openai"); assert.strictEqual(oa.kosten, "bezahlt");
     const m = await (await fetch(b + Z + "/zentrale/api/mandanten", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Kunde Modelltest", demoDaten: false }) })).json();
     const k = await fetch(b + "/zentrale/api/modelle", { headers: { Authorization: "Bearer " + m.token } });

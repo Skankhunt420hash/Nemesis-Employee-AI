@@ -92,6 +92,21 @@ Katalog, Vorlagen, Tool-Shop, Organisationen, Lizenzen und Freischaltungen serve
 ### P9: Produktionsreife
 S4, S5, S8 beheben; Backup/Restore-Test; Monitoring; Lasttest; Abrechnung; mobile Prüfung aller Seiten; Pilot-Checkliste. **Keine automatische Liveschaltung.**
 
+## 4b. Zusatzwünsche (22.11.2026, verbindlich)
+
+**Lernendes NEMESIS-Gehirn.** Die App soll mit jedem Schritt klüger werden: Fehler analysieren, neue Ideen entwickeln, mehr können. Echt umgesetzt heißt das (ohne Fake-Lernen):
+| Baustein | Was es konkret ist | Phase |
+|---|---|---|
+| Erfahrungsgedächtnis | Nach jedem Lauf schreibt die Runtime automatisch „Lektionen“ (was hat funktioniert, welcher Fehler, welche Korrektur) in ein gemeinsames Gedächtnis pro Agent und pro Kunde; vor neuen Aufträgen werden passende Lektionen abgerufen | P2 |
+| Fehleranalyse | Wiederkehrende Werkzeugfehler und abgelehnte Freigaben werden ausgewertet → konkrete Verbesserungsvorschläge (Prompt, Rechte, Werkzeuge) mit Freigabe durch den Admin | P2/P4 |
+| Wissen | Wissensbasis/RAG aus Läufen, Dokumenten und freigegebenen Quellen | P4 |
+| Neue Fähigkeiten | Skill Forge: Das Gehirn erkennt fehlende Werkzeuge, baut sie, testet sie und schlägt sie vor | P6 |
+| Ideen | Ein Ideen-/Reflexions-Agent wertet Erfahrungen regelmäßig aus und schlägt neue Abläufe vor (nur Vorschläge, keine Selbständerung ohne Freigabe) | P5/P6 |
+| Echtes Training | Fine-Tuning eigener Adapter aus gesammelten, freigegebenen Erfahrungen | P7 (braucht GPU) |
+Grenze: Das Gehirn ändert sich nie selbst an Rechten, Kosten oder Produktivcode. Jede Verbesserung ist nachvollziehbar, versioniert und rücknehmbar.
+
+**Phase 10 (nach P9): Free-Modell-Bibliothek und Erweiterung.** Bibliothek aller verfügbaren Gratis-Modelle (Anbieter, Kontext, Fähigkeiten, Kontingent, Status) mit Auswahl pro Agent; zusätzliche Gratis-Anbieter (OpenAI-kompatible Schnittstellen, nur offizielle Gratis-Stufen); Rotation über alle, damit insgesamt möglichst viele Gratis-Tokens nutzbar sind. OpenAI/Claude sind seit 22.11. aus der automatischen Rotation entfernt.
+
 ## 5. Kostenrahmen (getrennt nach Art)
 | Art | Heute | Regel |
 |---|---|---|

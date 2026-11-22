@@ -488,14 +488,14 @@ SEITE.modelle = async () => {
   S.auto = 0;
   if (S.ich.rolle !== "admin") return kopf("Kein Zugriff");
   const m = (await api("/modelle")).modelle;
-  const kl = (a) => a.kosten === "bezahlt" ? '<span class="chip err">kostenpflichtig</span>' : a.kosten === "pro-modell" ? (a.verifiziert ? `<span class="chip ok">${a.verifiziert.gratis} Gratis-Modelle verifiziert</span>` : a.id === "openrouter" ? '<span class="chip ok">nur :free-Modelle</span>' : '<span class="chip warn">gesperrt: Preise prüfen oder bestätigen</span>') + (a.bestaetigt ? ' <span class="chip ok">bestätigt</span>' : "") : a.bestaetigt ? '<span class="chip ok">gratis bestätigt</span>' : '<span class="chip warn">gesperrt: Gratis nicht bestätigt</span>';
+  const kl = (a) => a.kosten === "bezahlt" ? '<span class="chip err">kostenpflichtig</span>' : a.kosten === "pro-modell" ? (a.verifiziert ? `<span class="chip ok">${a.verifiziert.gratis} Gratis-Modelle verifiziert</span>` : a.id === "openrouter" ? '<span class="chip ok">nur :free-Modelle</span>' : '<span class="chip warn">gesperrt: Preise prüfen oder bestätigen</span>') + (a.bestaetigt ? ' <span class="chip ok">bestätigt</span>' : "") : a.aus ? '<span class="chip err">abgeschaltet</span>' : '<span class="chip ok">gratis · aktiv in der Rotation</span>';
   const zeilen = m.anbieter.map((a) => `<tr><td><b>${esc(a.name)}</b><div class="mut klein">${esc(a.hinweis)}</div>${a.bestaetigt ? `<div class="klein mut">Bestätigt von ${esc(a.bestaetigt.von)} am ${zeit(a.bestaetigt.am)}: „${esc(a.bestaetigt.notiz)}“</div>` : ""}</td>
     <td>${a.schluessel ? '<span class="chip ok">Schlüssel da</span>' : '<span class="chip">kein Schlüssel</span>'}</td><td>${kl(a)}</td>
     <td class="mono klein">${a.verbrauch.anfragen}/${a.limits.rpd || "∞"} heute<br>${a.limits.rpm || "∞"}/min${a.pauseBis ? `<br><span class="chip warn">Pause bis ${zeit(a.pauseBis)}</span>` : ""}${a.verbrauch.letzterFehler ? `<div class="mut">${esc(a.verbrauch.letzterFehler)}</div>` : ""}</td>
-    <td>${a.kosten === "bezahlt" ? "" : a.bestaetigt ? `<button class="knopf klein" data-mbzurueck="${a.id}">Bestätigung zurücknehmen</button>` : a.kosten === "konto" || a.id === "together" ? `<button class="knopf klein" data-mbest="${a.id}">Gratis bestätigen…</button>` : ""}
+    <td>${a.kosten === "bezahlt" ? "" : `<button class="knopf klein ${a.aus ? "" : "gefahr"}" data-mschalt="${a.id}" data-aus="${a.aus ? 0 : 1}">${a.aus ? "Einschalten" : "Abschalten"}</button>`}
       ${a.preisPruefung ? `<button class="knopf klein" data-mverif="${a.id}">Preise prüfen</button>` : ""}
       <button class="knopf klein" data-mlim="${a.id}" data-rpm="${a.limits.rpm || 0}" data-rpd="${a.limits.rpd || 0}">Limits</button></td></tr>`).join("");
-  return kopf("Modelle & Kosten", "Standard: nur Gratis-Modelle. Ein vorhandener Schlüssel ist keine Kostenfreigabe. Kein automatischer Wechsel auf bezahlte Modelle.") +
+  return kopf("Modelle & Kosten", "Alle Gratis-Anbieter rotieren automatisch: ist einer leer, übernimmt der nächste. OpenAI und Claude sind nicht in der Rotation.") +
   `<div class="hinweis cy" style="margin-bottom:14px">Modus: <b>${m.modus === "nur-gratis" ? "Nur Gratis" : "Aus"}</b>. Ist das Gratis-Kontingent erschöpft, pausieren Aufträge und laufen automatisch weiter, sobald wieder Kontingent frei ist.</div>
   <div class="karte"><h3>Anbieter</h3><table class="t mobil"><thead><tr><th>Anbieter</th><th>Schlüssel</th><th>Kosten-Status</th><th>Kontingent</th><th></th></tr></thead><tbody>${zeilen}</tbody></table></div>
   <div class="raster r2" style="margin-top:14px"><div class="karte"><h3>Kostenpflichtige Freigaben</h3>
@@ -565,6 +565,7 @@ function binde() {
       if ("smtp" in d) { await mApi("/smtp", { smtp: { host: $("#smHost").value, port: +$("#smPort").value, benutzer: $("#smUser").value, passwort: $("#smPw").value || undefined, von: $("#smVon").value, vonName: $("#smName").value } }); toast("SMTP gespeichert"); await laden(); return zeichne(); }
       if ("limitsspeichern" in d) { const l = {}; document.querySelectorAll("[data-mlimit]").forEach((i) => l[i.dataset.mlimit] = +i.value); await mApi("/einstellungen", { limits: l }); toast("Limits gespeichert"); return zeichne(); }
       if (d.nmv || d.ocm) { t.classList.toggle("an"); return; }
+      if (d.mschalt) { await api("/modelle", { schalten: { anbieter: d.mschalt, aus: d.aus === "1" } }); return zeichne(); }
       if (d.mbest) { const n = prompt("Wie hast du geprüft, dass " + d.mbest + " für dieses Konto keine API-Kosten verursacht? (z.B. 'Groq-Konto ohne Zahlungsmittel, Free Tier, 22.11.')"); if (n) { await api("/modelle", { bestaetigen: { anbieter: d.mbest, notiz: n } }); toast("Bestätigt"); zeichne(); } return; }
       if (d.mbzurueck) { await api("/modelle", { bestaetigen: { anbieter: d.mbzurueck, zuruecknehmen: true } }); return zeichne(); }
       if (d.mverif) { const r = await api("/modelle/verifizieren", { anbieter: d.mverif }); toast(r.ergebnis.gratis + " Gratis-Modelle, " + r.ergebnis.bezahlt + " kostenpflichtige erkannt"); return zeichne(); }
