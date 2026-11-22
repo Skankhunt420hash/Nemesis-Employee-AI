@@ -1,3 +1,5 @@
+> **Hinweis:** Dieses Dokument ist der Audit aus dem ersten Auftrag. Massgeblich ist jetzt [NEMESIS_MASTERPLAN.md](NEMESIS_MASTERPLAN.md) (Phase 0).
+
 # Audit: NEMESIS Employee (Stand 21.11.2026, Branch `ccr-45791acd-iy1q1j`)
 
 ## 1. Bestandsaufnahme
