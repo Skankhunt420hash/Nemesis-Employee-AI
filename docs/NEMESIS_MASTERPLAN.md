@@ -27,15 +27,15 @@ Die früher gemeldeten Probleme sind nachgeprüft:
 
 | ID | Schwere | Befund | Beleg | Behebung in |
 |---|---|---|---|---|
-| **S1** | 🔴 kritisch (Kosten) | Jede Modellkette endet automatisch bei OpenAI (`WAHL` + `RETTUNG`); ein vorhandener `OPENAI_API_KEY` gilt als Erlaubnis. Betroffen sind alle Aufrufer: Zentrale-Engine, Telegram, Betrieb-Gast-Chat (**öffentlich**), `/bg`, Welt, `/llm`. | `app/nemesis-app.js` `WAHL`, `RETTUNG`, `rotiere()` | **P1** (erste Aufgabe) |
-| **S2** | 🔴 kritisch (Kosten) | Der öffentliche Kunden-Chat `/api/chat` fragt zuerst Claude (kostenpflichtig), sobald `ANTHROPIC_API_KEY` gesetzt ist. | `build/nemesis-serve.js`, `build/patch-serve.js` | **P1** |
-| **S3** | 🟠 hoch (Kosten) | Die Gratis-Kennzeichnung ist eine statische Annahme, nicht verifiziert. Bei NVIDIA, Mistral, Cohere und Together hängt „gratis“ vom Konto und Tarif ab. Bei Gemini kann derselbe Schlüssel kostenpflichtig werden, wenn im Google-Projekt Billing aktiv ist. Nur OpenRouter filtert technisch auf `:free`-Modelle. Die Bedingungen müssen pro Konto in P1 bestätigt werden. | `ANBIETER[x].frei` | **P1** (Verifikation und Admin-Bestätigung pro Anbieter) |
+| **S1** ✅ | 🔴 kritisch (Kosten) | Jede Modellkette endet automatisch bei OpenAI (`WAHL` + `RETTUNG`); ein vorhandener `OPENAI_API_KEY` gilt als Erlaubnis. Betroffen sind alle Aufrufer: Zentrale-Engine, Telegram, Betrieb-Gast-Chat (**öffentlich**), `/bg`, Welt, `/llm`. | `app/nemesis-app.js` `WAHL`, `RETTUNG`, `rotiere()` | **P1** (erste Aufgabe) |
+| **S2** ✅ | 🔴 kritisch (Kosten) | Der öffentliche Kunden-Chat `/api/chat` fragt zuerst Claude (kostenpflichtig), sobald `ANTHROPIC_API_KEY` gesetzt ist. | `build/nemesis-serve.js`, `build/patch-serve.js` | **P1** |
+| **S3** ✅ | 🟠 hoch (Kosten) | Die Gratis-Kennzeichnung ist eine statische Annahme, nicht verifiziert. Bei NVIDIA, Mistral, Cohere und Together hängt „gratis“ vom Konto und Tarif ab. Bei Gemini kann derselbe Schlüssel kostenpflichtig werden, wenn im Google-Projekt Billing aktiv ist. Nur OpenRouter filtert technisch auf `:free`-Modelle. Die Bedingungen müssen pro Konto in P1 bestätigt werden. | `ANBIETER[x].frei` | **P1** (Verifikation und Admin-Bestätigung pro Anbieter) |
 | **S4** | 🔴 kritisch (Deploy) | Selbst-Update alle 30 Minuten von `main` ohne Signatur oder Freigabe | `update()` | Sofort-Empfehlung `NEMESIS_AUTO_UPDATE=0`; Absicherung (gepinnter Commit oder signiertes Release) in **P9**, früher auf Wunsch |
 | **S5** | 🟠 hoch | Ohne `NEMESIS_ZUGANG` ist alles offen („altes Verhalten“). | `schutz()` in `nemesis-serve.js` | P9 (Fail-closed) |
 | **S6** | 🟠 hoch | Anfragen von `127.0.0.1` ohne `X-Forwarded-For` gelten als Betreiber. Jeder lokale Prozess (OpenClaw-Gateway, OpenCode, ein Sandbox-Ausbruch in einem Host-Prozess) bekommt damit Admin-Zugriff. Das Node-Permission-Model in Node 22 sperrt kein Netzwerk. | `schutz()`, `vonAussen()` | **P2** (lokales Vertrauen abschaffen: Admin nur mit Schlüssel), Voraussetzung für P3 |
 | **S7** | 🟡 mittel | `/fetch` im Sync-Server ohne SSRF-Schutz (nur mit Admin-Zugang erreichbar) | `build/nemesis-sync.js` | P4 (Web-Werkzeug vereinheitlichen) |
 | **S8** | 🟡 mittel | Das Admin-Geheimnis steht im URL-Pfad (Verlauf, Logs) | `/k/<Zugang>/` | P8/P9 (Benutzerkonten mit Sitzung) |
-| **S9** | 🟡 mittel | Das Lab speichert Anbieter-Schlüssel im Browser (`localStorage nx:cfg`) und ruft kostenpflichtige Anbieter direkt auf, ohne serverseitiges Gate | `nemesis-app.html` `ask()` | P1 (Server-Route als Standard, Direktaufruf nur ausdrücklich) |
+| **S9** ✅ | 🟡 mittel | Das Lab speichert Anbieter-Schlüssel im Browser (`localStorage nx:cfg`) und ruft kostenpflichtige Anbieter direkt auf, ohne serverseitiges Gate | `nemesis-app.html` `ask()` | P1 (Server-Route als Standard, Direktaufruf nur ausdrücklich) |
 | **S10** | 🟡 mittel | Docker-Sandbox: Image nicht gepinnt. Während `pakete_installieren` hat der Container Netz (Host-Bridge, Metadata-IP erreichbar; durch `--ignore-scripts` gemildert). Der Server-Prozess steuert Docker (Root-äquivalent). | `engine.js` `erstelleSandbox` | P3 (Digest-Pin, Egress nur zur Registry, eigener Sandbox-Dienst) |
 | **S11** | 🟡 mittel | Eine OpenClaw-Gateway-Instanz für alle Kunden | `engine.js` `openclaw()` | P5 (eine Instanz pro Kunde oder gesperrt) |
 | **S12** | ⚪ niedrig | Zentrale-CSP mit `'unsafe-inline'`; Kunden-Token im `localStorage` | `http.js`, `zentrale.html` | P8/P9 |
@@ -43,6 +43,8 @@ Die früher gemeldeten Probleme sind nachgeprüft:
 | **S14** | ⚪ niedrig | Keine Benutzer/Rollen innerhalb eines Kunden | Zentrale | P8 |
 
 **Keine Produktionsdaten verändert.** Alle Tests laufen mit Temp-Ordnern.
+
+✅ = im Branch behoben (Phase 1, 22.11.2026). Details: [PHASE_STATUS.md](PHASE_STATUS.md).
 
 ## 3. Konsolidierungsentscheidungen (gegen widersprüchliche Architektur)
 

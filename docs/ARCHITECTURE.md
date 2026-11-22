@@ -33,8 +33,8 @@ Grundsatz: **Es gibt keine zweite Plattform.** Die vorhandene Zentrale-Engine (`
 app/agenten/
   kern/          Universal Agent Runtime: Laeufe, Schleife, Plan, Validierung, Pause/Resume/Stop,
                  Limits, Freigaben, Delegation, Ereignisse
-  modelle/       Provider-Registry + Router + Kosten-Gate (ersetzt die Logik von rotiere(); der alte
-                 Endpunkt /llm bleibt als Fassade bestehen)
+  modelle/       Provider-Registry + Router + Kosten-Gate  ✅ router.js (Phase 1). rotiere() bleibt der
+                 Transport (HTTP zu den Anbietern) und fragt fuer jeden Kandidaten das Gate.
   werkzeuge/     Tool-Registry: ausfuehrbare Werkzeuge mit Manifest (art, rechte, timeout, umgebung,
                  version), gruppiert in Pakete (dateien, coding, office, web, browser, medien,
                  betrieb, telegram ...)
@@ -62,7 +62,7 @@ app/agenten/
 | A10 | Mobil zuerst: Jede neue UI-Funktion muss bei 375 px Breite ohne horizontales Scrollen bedienbar sein (Playwright-Prüfung in den Tests). |
 
 ### Build und Auslieferung
-Die Module in `app/agenten/**` werden von `build/einbetten.py` zu `AGENTEN_SRC` gebündelt (Erweiterung: mehrere Module mit einem kleinen `require`-Shim). Damit bleiben Installer und Selbst-Update kompatibel. Tests laden die Module direkt.
+Die Module in `app/agenten/**` werden von `build/einbetten.py` zu `AGENTEN_SRC.module` gebündelt; `agRequire()` in `nemesis-app.js` löst relative `require`-Aufrufe innerhalb dieser Module auf (seit Phase 1). Damit bleiben Installer und Selbst-Update kompatibel. Tests laden die Module direkt.
 
 ### Abhängigkeiten der Phasen
 ```

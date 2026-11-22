@@ -92,6 +92,13 @@ function createHttp(engine, opt) {
       if (r === "/katalog" && !POST) return sende(res, 200, { werkzeuge: engine.werkzeugKatalog(), modi: engine.MODI.map((m) => ({ id: m, text: engine.MODUS_TEXT[m] })), autonomie: engine.AUTONOMIE, vorlagen: Object.keys(engine.VORLAGEN), vorlagenDaten: engine.VORLAGEN, modelle: opt.modelle ? opt.modelle() : ["auto"] }), true;
       if (r === "/mandanten" && !POST) { if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true; return sende(res, 200, { mandanten: engine.mandanten().map((m) => Object.assign(m, { offeneFreigaben: engine.freigabenListe(m.id).length, aktiv: engine.laeufeListe(m.id).filter((l) => ["laeuft", "wartet"].includes(l.status)).length })) }), true; }
       if (r === "/mandanten" && POST) { if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true; return sende(res, 200, engine.mandantNeu(await lies(req), "admin")), true; }
+      if (r === "/modelle" || r === "/modelle/verifizieren") {
+        if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true;
+        if (!opt.router) return sende(res, 503, { error: "Modell-Router nicht verfuegbar" }), true;
+        if (r === "/modelle/verifizieren" && POST) return sende(res, 200, { ergebnis: await opt.router.verifiziere((await lies(req)).anbieter) }), true;
+        if (POST) return sende(res, 200, { modelle: opt.router.setze(await lies(req), "admin") }), true;
+        return sende(res, 200, { modelle: opt.router.status() }), true;
+      }
       if (r === "/openclaw") {
         if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true;
         if (POST) return sende(res, 200, { openclaw: engine.openclawSetzen(await lies(req), "admin") }), true;
@@ -151,7 +158,7 @@ function createHttp(engine, opt) {
       if (q === "/loeschen" && POST) { if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true; return sende(res, 200, engine.mandantLoeschen(tid, (await lies(req)).bestaetigung, A)), true; }
       return sende(res, 404, { error: "Unbekannt" }), true;
     } catch (e) {
-      const code = [400, 403, 404, 409, 413, 423].includes(e.code) ? e.code : 400;
+      const code = [400, 403, 404, 409, 413, 423, 502].includes(e.code) ? e.code : 400;
       sende(res, code, { error: String(e.message || e).slice(0, 400) });
       return true;
     }

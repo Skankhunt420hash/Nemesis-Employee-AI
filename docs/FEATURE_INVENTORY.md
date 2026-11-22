@@ -44,9 +44,9 @@ Branch `ccr-45791acd-iy1q1j` (Entwicklungsbranch; `main` ist unverändert und en
 
 | Funktion | Ort | Status | Nachweis | Bemerkung |
 |---|---|---|---|---|
-| Gratis-Rotator mit Anbieterwechsel, Pause bei 429/401, Denk-Modell-Wiederholung | `nemesis-app.js` `rotiere()`, `ANBIETER`, `WAHL` | ✅ technisch / ❌ Kostenregel | C | **Jede Kette endet automatisch bei OpenAI** (`WAHL` + `RETTUNG`); ein vorhandener Schlüssel gilt als Erlaubnis. Verstößt gegen die neue Kostenregel. |
+| Gratis-Rotator mit Anbieterwechsel, Pause bei 429/401, Denk-Modell-Wiederholung | `nemesis-app.js` `rotiere()`, `ANBIETER`, `WAHL` | ✅ (seit Phase 1 mit Kosten-Gate) | T | **Jede Kette endet automatisch bei OpenAI** (`WAHL` + `RETTUNG`); ein vorhandener Schlüssel gilt als Erlaubnis. Verstößt gegen die neue Kostenregel. |
 | „Gratis“-Kennzeichnung | `ANBIETER[x].frei` | 🟡 | C | Statische Annahme, **nicht verifiziert** (siehe S3) |
-| Free-only-Schalter | `rotiere({nurFrei})` | 🟡 | C | Nur pro Aufruf und standardmäßig **aus**. Nur der Welt-Autopilot nutzt ihn optional. |
+| Free-only (Router) | `app/agenten/modelle/router.js` | ✅ | T | Standard und serverseitig; Bezahlmodelle nur mit Freigabe und ausdrücklicher Wahl (Phase 1) |
 | Schlüssel-Zentrale (Erkennen, Live-Prüfung, `.env`) | `nemesis-app.js` `sk*` | ✅ (laut Code) | C | |
 | Lab: direkte Anbieter-Aufrufe aus dem Browser (Anthropic, OpenAI …) mit Schlüssel im Browser | `nemesis-app.html` `ask()`, `nx:cfg` | 🟡 | C | Schlüssel im `localStorage`. Kein serverseitiges Kosten-Gate. |
 | Öffentlicher Kunden-Chat `/api/chat`: Claude zuerst, Rotator als Ausweichmodell | `build/nemesis-serve.js` + `build/patch-serve.js` | ✅ technisch / ❌ Kostenregel | C | **Kostenpflichtiges Modell an einem öffentlichen Endpunkt**, sobald `ANTHROPIC_API_KEY` gesetzt ist |

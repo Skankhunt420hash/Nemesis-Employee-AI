@@ -151,7 +151,7 @@ const mApi = (p, b) => api("/m/" + S.tid + p, b);
 function toast(t, err) { const d = document.createElement("div"); d.className = "toast" + (err ? " err" : ""); d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), err ? 6000 : 3000); }
 const zeit = (t) => { if (!t) return "–"; const d = new Date(t); return d.toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" }); };
 const seit = (t) => { const s = Math.round((Date.now() - Date.parse(t)) / 1000); return s < 60 ? s + " s" : s < 3600 ? Math.round(s / 60) + " min" : s < 86400 ? Math.round(s / 3600) + " h" : Math.round(s / 86400) + " T"; };
-const STATUS = { laeuft: ["lauf", "Läuft"], wartet: ["lauf", "In Warteschlange"], wartet_freigabe: ["warn", "Wartet auf dich"], fertig: ["ok", "Fertig"], fehler: ["err", "Fehler"], gestoppt: ["", "Gestoppt"] };
+const STATUS = { laeuft: ["lauf", "Läuft"], wartet: ["lauf", "In Warteschlange"], wartet_freigabe: ["warn", "Wartet auf dich"], wartet_kontingent: ["warn", "Pausiert: Gratis-Kontingent"], fertig: ["ok", "Fertig"], fehler: ["err", "Fehler"], gestoppt: ["", "Gestoppt"] };
 const statusChip = (s) => { const [k, t] = STATUS[s] || ["", s]; return `<span class="chip ${k}"><span class="punkt ${s === "laeuft" ? "puls" : ""}"></span>${esc(t)}</span>`; };
 
 /* ================= Avatar-Generator (SVG, deterministisch) ================= */
@@ -204,7 +204,7 @@ const SEITEN = [
 ];
 function nav() {
   const fr = (S.daten.uebersicht && S.daten.uebersicht.freigaben) || 0;
-  const liste = SEITEN.concat(S.ich && S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"]] : []);
+  const liste = SEITEN.concat(S.ich && S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"], ["modelle", "⚡", "Modelle & Kosten"]] : []);
   const knopf = (s, kl) => `<button class="${S.seite === s[0] ? "an" : ""}" data-seite="${s[0]}"><span class="ic">${s[1]}</span>${kl ? "" : ""}${esc(s[2])}${s[0] === "freigaben" && fr ? `<span class="zahl">${fr}</span>` : ""}</button>`;
   return `<nav class="seite"><div class="marke"><svg width="30" height="30" viewBox="0 0 64 64"><path d="M32 6 L58 32 L32 58 L6 32 Z" fill="none" stroke="#FF2D78" stroke-width="5"/><path d="M32 20 L44 32 L32 44 L20 32 Z" fill="#22E0FF"/></svg><div>NEMESIS<small>ZENTRALE</small></div></div>
     ${liste.map((s) => knopf(s)).join("")}
@@ -212,7 +212,7 @@ function nav() {
   <div class="unten">${liste.slice(0, 7).map((s) => `<button class="${S.seite === s[0] ? "an" : ""}" data-seite="${s[0]}"><span class="ic">${s[1]}</span>${esc(s[2])}${s[0] === "freigaben" && fr ? `<span class="zahl">${fr}</span>` : ""}</button>`).join("")}</div>`;
 }
 function mandantWahl() {
-  if (!S.ich || S.ich.rolle !== "admin") return "";
+  if (!S.ich || S.ich.rolle !== "admin" || S.seite === "modelle") return "";
   return `<select class="mandantwahl" id="tidwahl">${S.mandanten.length ? "" : "<option>– kein Kunde –</option>"}${S.mandanten.map((m) => `<option value="${esc(m.id)}" ${m.id === S.tid ? "selected" : ""}>${esc(m.name)}${m.politik && m.politik.demo ? " · Demo" : ""}</option>`).join("")}</select>`;
 }
 function kopf(titel, unter, rechts) { return `<div class="kopf"><div><h1>${titel}</h1>${unter ? `<p>${unter}</p>` : ""}</div><div class="rechts">${rechts || ""}${mandantWahl()}</div></div>`; }
@@ -223,7 +223,7 @@ async function zeichne() {
   if (!S.ich) return;
   let inhalt = "";
   try {
-    if (S.seite !== "mandanten" && !S.tid) inhalt = kopf("Willkommen") + `<div class="karte leer">Noch kein Kunde angelegt. ${S.ich.rolle === "admin" ? '<br><br><button class="knopf pri" data-seite="mandanten">Ersten Pilotkunden anlegen</button>' : ""}</div>`;
+    if (!["mandanten", "modelle"].includes(S.seite) && !S.tid) inhalt = kopf("Willkommen") + `<div class="karte leer">Noch kein Kunde angelegt. ${S.ich.rolle === "admin" ? '<br><br><button class="knopf pri" data-seite="mandanten">Ersten Pilotkunden anlegen</button>' : ""}</div>`;
     else inhalt = await (SEITE[S.seite] || SEITE.uebersicht)();
   } catch (e) { inhalt = kopf("Fehler") + `<div class="hinweis rot">${esc(e.message)}</div>`; }
   const notaus = S.ich.notaus ? `<div class="notaus"><b>⛔ NOTAUS AKTIV</b><span class="mut">Alle Agenten sind gestoppt, neue Aufträge gesperrt.</span>${S.ich.rolle === "admin" ? '<button class="knopf klein" id="notausAus" style="margin-left:auto">Notaus aufheben</button>' : ""}</div>` : "";
@@ -343,7 +343,7 @@ SEITE.auftraege = async () => {
 };
 async function laufDetail() {
   const { lauf: l } = await mApi("/laeufe/" + S.laufId);
-  S.auto = ["laeuft", "wartet", "wartet_freigabe"].includes(l.status) ? 2500 : 0;
+  S.auto = ["laeuft", "wartet", "wartet_freigabe", "wartet_kontingent"].includes(l.status) ? 2500 : 0;
   const farbe = { start: "var(--cyan)", plan: "var(--lila)", gedanke: "var(--text3)", werkzeug: "var(--cyan)", ergebnis: "var(--gruen)", werkzeugfehler: "var(--rot)", gesperrt: "var(--rot)", freigabe: "var(--gelb)", entscheid: "var(--gelb)", frage: "var(--gelb)", fertig: "var(--gruen)", fehler: "var(--rot)", stopp: "var(--rot)", pruefung: "var(--lila)", delegation: "var(--pink)", warnung: "var(--gelb)" };
   const titel = { start: "Start", plan: "Analyse & Plan", gedanke: "Gedanke", werkzeug: "Aktion", ergebnis: "Ergebnis", werkzeugfehler: "Fehler (wird korrigiert)", gesperrt: "Gesperrt durch Rechte", freigabe: "Freigabe angefragt", entscheid: "Entscheid", frage: "Rückfrage", fertig: "Fertig", fehler: "Abbruch", stopp: "Gestoppt", pruefung: "Abschlussprüfung (Build/Tests)", delegation: "Delegiert", warnung: "Warnung" };
   const ev = l.log.slice().reverse().slice(0, 200).map((e) => `<div class="ereignis" style="--farbe:${farbe[e.typ] || "var(--text3)"}"><div class="zt">${zeit(e.t)} · ${esc(titel[e.typ] || e.typ)}${e.werkzeug ? " · <b>" + esc(e.werkzeug) + "</b>" : ""}${e.ms ? " · " + e.ms + " ms" : ""}${e.typ === "pruefung" ? (e.ok ? ' <span class="chip ok">bestanden</span>' : ' <span class="chip err">fehlgeschlagen</span>') : ""}</div>
@@ -353,7 +353,7 @@ async function laufDetail() {
     ${l.freigabe.art === "frage" ? `<div class="mailtext">${esc(l.freigabe.frage)}</div><textarea class="e" id="frAntwort" style="margin-top:10px" placeholder="Deine Antwort"></textarea>` : `<div class="mut">${esc(l.freigabe.grund)}</div><pre class="code">${esc(JSON.stringify(l.freigabe.args, null, 2))}</pre><input class="e" id="frNotiz" placeholder="Notiz (optional)" style="margin-top:8px">`}
     <div class="zeile" style="margin-top:10px"><button class="knopf pri" data-frlauf="${l.id}" data-fr="ja" data-frid="${l.freigabe.id}">${l.freigabe.art === "frage" ? "Antworten" : "Freigeben & ausführen"}</button>${l.freigabe.art === "frage" ? "" : `<button class="knopf gefahr" data-frlauf="${l.id}" data-fr="nein" data-frid="${l.freigabe.id}">Ablehnen</button>`}</div></div>` : "";
   const rest = l.deadline ? Math.max(0, Math.round((l.deadline - Date.now()) / 60000)) : null;
-  return kopf("Auftrag · " + esc(l.agentName), esc(l.ziel), `<button class="knopf" data-zurueck>← Zurück</button>${["laeuft", "wartet", "wartet_freigabe"].includes(l.status) ? `<button class="knopf gefahr voll" data-stopp="${l.id}">■ Stoppen</button>` : ""}`) +
+  return kopf("Auftrag · " + esc(l.agentName), esc(l.ziel), `<button class="knopf" data-zurueck>← Zurück</button>${["laeuft", "wartet", "wartet_freigabe", "wartet_kontingent"].includes(l.status) ? `<button class="knopf gefahr voll" data-stopp="${l.id}">■ Stoppen</button>` : ""}`) +
   `<div class="raster r4" style="margin-bottom:14px">
     <div class="karte kpi"><div class="lbl">Status</div><div style="margin-top:6px">${statusChip(l.status)}</div><div class="unter">${esc(l.phase)}</div></div>
     <div class="karte kpi"><div class="lbl">Schritte</div><div class="wert">${l.zaehler.schritte}</div><div class="unter">${l.zaehler.werkzeuge} Aktionen · ${l.zaehler.korrekturen} Korrekturen</div></div>
@@ -484,6 +484,29 @@ async function openclawKarte() {
     <button class="knopf pri" data-ocspeichern style="margin-left:auto">Speichern & prüfen</button></div></div>`;
 }
 
+SEITE.modelle = async () => {
+  S.auto = 0;
+  if (S.ich.rolle !== "admin") return kopf("Kein Zugriff");
+  const m = (await api("/modelle")).modelle;
+  const kl = (a) => a.kosten === "bezahlt" ? '<span class="chip err">kostenpflichtig</span>' : a.kosten === "pro-modell" ? (a.verifiziert ? `<span class="chip ok">${a.verifiziert.gratis} Gratis-Modelle verifiziert</span>` : a.id === "openrouter" ? '<span class="chip ok">nur :free-Modelle</span>' : '<span class="chip warn">gesperrt: Preise prüfen oder bestätigen</span>') + (a.bestaetigt ? ' <span class="chip ok">bestätigt</span>' : "") : a.bestaetigt ? '<span class="chip ok">gratis bestätigt</span>' : '<span class="chip warn">gesperrt: Gratis nicht bestätigt</span>';
+  const zeilen = m.anbieter.map((a) => `<tr><td><b>${esc(a.name)}</b><div class="mut klein">${esc(a.hinweis)}</div>${a.bestaetigt ? `<div class="klein mut">Bestätigt von ${esc(a.bestaetigt.von)} am ${zeit(a.bestaetigt.am)}: „${esc(a.bestaetigt.notiz)}“</div>` : ""}</td>
+    <td>${a.schluessel ? '<span class="chip ok">Schlüssel da</span>' : '<span class="chip">kein Schlüssel</span>'}</td><td>${kl(a)}</td>
+    <td class="mono klein">${a.verbrauch.anfragen}/${a.limits.rpd || "∞"} heute<br>${a.limits.rpm || "∞"}/min${a.pauseBis ? `<br><span class="chip warn">Pause bis ${zeit(a.pauseBis)}</span>` : ""}${a.verbrauch.letzterFehler ? `<div class="mut">${esc(a.verbrauch.letzterFehler)}</div>` : ""}</td>
+    <td>${a.kosten === "bezahlt" ? "" : a.bestaetigt ? `<button class="knopf klein" data-mbzurueck="${a.id}">Bestätigung zurücknehmen</button>` : a.kosten === "konto" || a.id === "together" ? `<button class="knopf klein" data-mbest="${a.id}">Gratis bestätigen…</button>` : ""}
+      ${a.preisPruefung ? `<button class="knopf klein" data-mverif="${a.id}">Preise prüfen</button>` : ""}
+      <button class="knopf klein" data-mlim="${a.id}" data-rpm="${a.limits.rpm || 0}" data-rpd="${a.limits.rpd || 0}">Limits</button></td></tr>`).join("");
+  return kopf("Modelle & Kosten", "Standard: nur Gratis-Modelle. Ein vorhandener Schlüssel ist keine Kostenfreigabe. Kein automatischer Wechsel auf bezahlte Modelle.") +
+  `<div class="hinweis cy" style="margin-bottom:14px">Modus: <b>${m.modus === "nur-gratis" ? "Nur Gratis" : "Aus"}</b>. Ist das Gratis-Kontingent erschöpft, pausieren Aufträge und laufen automatisch weiter, sobald wieder Kontingent frei ist.</div>
+  <div class="karte"><h3>Anbieter</h3><table class="t mobil"><thead><tr><th>Anbieter</th><th>Schlüssel</th><th>Kosten-Status</th><th>Kontingent</th><th></th></tr></thead><tbody>${zeilen}</tbody></table></div>
+  <div class="raster r2" style="margin-top:14px"><div class="karte"><h3>Kostenpflichtige Freigaben</h3>
+    ${m.freigaben.length ? `<table class="t"><tbody>${m.freigaben.map((f) => `<tr><td><b>${esc(f.anbieter)}</b> <span class="mono">${esc(f.muster)}</span><div class="mut klein">Budget CHF ${f.budgetChfTag}/Tag · heute CHF ${f.heuteChf.toFixed(3)} · ${f.bis ? "bis " + zeit(f.bis) : "unbefristet"} · ${esc(f.von)}</div></td><td><button class="knopf klein gefahr" data-mfweg="${f.id}">Entziehen</button></td></tr>`).join("")}</tbody></table>` : '<div class="mut">Keine. Bezahlte Modelle sind gesperrt.</div>'}
+    <div class="hinweis" style="margin-top:10px">Auch mit Freigabe werden bezahlte Modelle nur genutzt, wenn ein Agent oder Benutzer sie <b>ausdrücklich wählt</b>, nie als automatischer Ersatz.</div>
+    <div class="raster r2"><div><label class="f">Anbieter</label><select class="e" id="mfA">${m.anbieter.filter((a) => a.kosten !== "konto").map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select></div><div><label class="f">Modell-Muster</label><input class="e" id="mfM" placeholder="gpt-4o-mini oder gpt-5*"></div></div>
+    <div class="raster r3"><div><label class="f">Budget CHF/Tag</label><input class="e" id="mfB" type="number" step="0.5" value="1"></div><div><label class="f">CHF pro 1 Mio. Tokens</label><input class="e" id="mfP" type="number" step="0.1" value="10"></div><div><label class="f">Gültig bis (optional)</label><input class="e" id="mfBis" type="date"></div></div>
+    <label class="f">Bestätigung: „Ich erlaube Kosten“</label><input class="e" id="mfOk" placeholder="Ich erlaube Kosten"><button class="knopf gefahr" style="margin-top:10px" data-mfneu>Kosten freigeben</button></div>
+  <div class="karte"><h3>Protokoll</h3>${m.protokoll.length ? m.protokoll.map((p) => `<div class="klein" style="padding:4px 0;border-bottom:1px solid var(--linie)"><span class="mono mut">${zeit(p.t)}</span> ${esc(p.akteur)} · <b>${esc(p.aktion)}</b> <span class="mut mono">${esc(JSON.stringify(p.d)).slice(0, 160)}</span></div>`).join("") : '<div class="mut">Noch leer.</div>'}</div></div>`;
+};
+
 /* ================= Dialoge ================= */
 function modal(html) { const d = document.createElement("div"); d.className = "modal"; d.innerHTML = `<div class="in">${html}</div>`; d.addEventListener("click", (e) => { if (e.target === d || e.target.closest("[data-zu]")) d.remove(); }); document.body.appendChild(d); return d; }
 async function neuerAuftrag(agentId) {
@@ -542,6 +565,12 @@ function binde() {
       if ("smtp" in d) { await mApi("/smtp", { smtp: { host: $("#smHost").value, port: +$("#smPort").value, benutzer: $("#smUser").value, passwort: $("#smPw").value || undefined, von: $("#smVon").value, vonName: $("#smName").value } }); toast("SMTP gespeichert"); await laden(); return zeichne(); }
       if ("limitsspeichern" in d) { const l = {}; document.querySelectorAll("[data-mlimit]").forEach((i) => l[i.dataset.mlimit] = +i.value); await mApi("/einstellungen", { limits: l }); toast("Limits gespeichert"); return zeichne(); }
       if (d.nmv || d.ocm) { t.classList.toggle("an"); return; }
+      if (d.mbest) { const n = prompt("Wie hast du geprüft, dass " + d.mbest + " für dieses Konto keine API-Kosten verursacht? (z.B. 'Groq-Konto ohne Zahlungsmittel, Free Tier, 22.11.')"); if (n) { await api("/modelle", { bestaetigen: { anbieter: d.mbest, notiz: n } }); toast("Bestätigt"); zeichne(); } return; }
+      if (d.mbzurueck) { await api("/modelle", { bestaetigen: { anbieter: d.mbzurueck, zuruecknehmen: true } }); return zeichne(); }
+      if (d.mverif) { const r = await api("/modelle/verifizieren", { anbieter: d.mverif }); toast(r.ergebnis.gratis + " Gratis-Modelle, " + r.ergebnis.bezahlt + " kostenpflichtige erkannt"); return zeichne(); }
+      if (d.mlim) { const rpm = prompt("Anfragen pro Minute (0 = ohne Limit)", d.rpm); if (rpm === null) return; const rpd = prompt("Anfragen pro Tag (0 = ohne Limit)", d.rpd); if (rpd === null) return; await api("/modelle", { limits: { [d.mlim]: { rpm: +rpm, rpd: +rpd } } }); return zeichne(); }
+      if (d.mfweg) { await api("/modelle", { freigabe: { entfernen: d.mfweg } }); toast("Freigabe entzogen"); return zeichne(); }
+      if ("mfneu" in d) { await api("/modelle", { freigabe: { anbieter: $("#mfA").value, muster: $("#mfM").value.trim(), budgetChfTag: +$("#mfB").value, chfPro1MTokens: +$("#mfP").value, bis: $("#mfBis").value ? new Date($("#mfBis").value + "T23:59:59").toISOString() : null, bestaetigung: $("#mfOk").value.trim() } }); toast("Freigabe gespeichert"); return zeichne(); }
       if ("ocspeichern" in d) { const r = await api("/openclaw", { url: $("#ocUrl").value.trim(), token: $("#ocTok").value || undefined, agentId: $("#ocAgent").value.trim(), aktiv: $("#ocAktiv").checked, profilJeMandant: $("#ocProfil").checked, mandanten: [...document.querySelectorAll("#ocMand .an")].map((b) => b.dataset.ocm) }); toast("OpenClaw gespeichert"); return zeichne(); }
       if ("mneu" in d) {
         const r = await api("/mandanten", { name: $("#nmName").value, branche: $("#nmBranche").value, kontakt: $("#nmKontakt").value, demo: $("#nmDemo").value === "1", agenten: [...document.querySelectorAll("#nmVorlagen .an")].map((b) => b.dataset.nmv) });

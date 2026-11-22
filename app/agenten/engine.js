@@ -837,7 +837,7 @@ function createEngine(opt) {
   const laufLaden = (tid, id) => { const l = liesJson(laufDatei(tid, id), null); if (!l) throw Object.assign(new Error("Lauf nicht gefunden"), { code: 404 }); return l; };
   const laufSpeichern = (l) => schreibJson(laufDatei(l.mandant, l.id), l);
   const projektOrdner = (tid, projekt) => { const p = String(projekt); if (!/^[a-z0-9][a-z0-9_-]{1,40}$/.test(p)) throw new Error("Ungueltiger Projektname"); const d = path.join(mDir(tid), "projekte", p); fs.mkdirSync(d, { recursive: true }); return fs.realpathSync(d); };
-  function laufKurz(l) { return { id: l.id, agent: l.agentName, agentId: l.agentId, ziel: kurz(l.ziel, 200), status: l.status, erstellt: l.erstellt, ende: l.ende || null, schritte: l.zaehler.schritte, werkzeuge: l.zaehler.werkzeuge, llm: l.zaehler.llm, projekt: l.projekt, eltern: l.eltern || null, wartetAuf: l.freigabe ? l.freigabe.werkzeug : null, ergebnis: kurz(l.ergebnis || "", 300), vorschau: !!l.vorschau }; }
+  function laufKurz(l) { return { id: l.id, agent: l.agentName, agentId: l.agentId, ziel: kurz(l.ziel, 200), status: l.status, erstellt: l.erstellt, ende: l.ende || null, schritte: l.zaehler.schritte, werkzeuge: l.zaehler.werkzeuge, llm: l.zaehler.llm, projekt: l.projekt, eltern: l.eltern || null, wartetAuf: l.freigabe ? l.freigabe.werkzeug : null, weiterAb: l.status === "wartet_kontingent" ? l.weiterAb : null, ergebnis: kurz(l.ergebnis || "", 300), vorschau: !!l.vorschau }; }
   function laeufeListe(tid) {
     let f = []; try { f = fs.readdirSync(datei(tid, "laeufe")).filter((x) => /^l[0-9a-f]{12}\.json$/.test(x)); } catch (e) {}
     return f.map((x) => liesJson(datei(tid, "laeufe/" + x), null)).filter(Boolean).sort((a, b) => (a.erstellt < b.erstellt ? 1 : -1)).map(laufKurz);
@@ -870,6 +870,15 @@ function createEngine(opt) {
   }
   function schnitt(eltern, kind) { const r = {}; for (const k of Object.keys(kind || {})) r[k] = strenger(modusOk((eltern || {})[k]), modusOk(kind[k])); return r; }
 
+  const kontingentWarter = new Map();   // laufId -> { tid, ab }
+  const kontingentUhr = setInterval(() => {
+    const n = jetzt();
+    for (const [id, w] of kontingentWarter) if (w.ab <= n) {
+      kontingentWarter.delete(id);
+      try { const l = laufLaden(w.tid, id); if (l.status === "wartet_kontingent") { l.status = "wartet"; log(l, "start", { x: "Kontingent wieder frei, Lauf geht weiter" }); laufSpeichern(l); einreihen(w.tid, id); } } catch (e) {}
+    }
+  }, opt.kontingentPruefMs || 15000);
+  if (kontingentUhr.unref) kontingentUhr.unref();
   function einreihen(tid, id) { if (!warteschlange.some((x) => x.id === id) && !aktive.has(id)) warteschlange.push({ tid, id }); pumpe(); }
   function pumpe() {
     if (GLOBAL.notaus) return;
@@ -896,13 +905,22 @@ function createEngine(opt) {
       l.status = "laeuft"; laufSpeichern(l);
       await schleife(l, z);
     } catch (e) {
+      if (e && e.code === "KONTINGENT" && !z.abbruch) {
+        const ab = Math.max(jetzt() + (opt.kontingentMinPauseMs != null ? opt.kontingentMinPauseMs : 30000), Number(e.wiederAb) || jetzt() + 15 * 60000);
+        l.status = "wartet_kontingent"; l.weiterAb = ab; l.pausegrund = kurz(e.message, 300);
+        log(l, "pause", { x: "Pausiert: " + e.message + " Weiter ab " + iso(ab) });
+        laufSpeichern(l);
+        audit(tid, "system", "lauf.pausiert_kontingent", { lauf: id, grund: e.grund || "KONTINGENT", weiterAb: iso(ab) });
+        if (!kindVon) kontingentWarter.set(id, { tid, ab });
+        return l;
+      }
       l = Object.assign(l, { status: z.abbruch ? "gestoppt" : "fehler", fehler: kurz(e.message, 500), ende: iso() });
       log(l, z.abbruch ? "stopp" : "fehler", { x: e.message });
       laufSpeichern(l);
       audit(tid, "system", z.abbruch ? "lauf.gestoppt" : "lauf.fehler", { lauf: id, grund: kurz(e.message, 200) });
     } finally {
       aktive.delete(id);
-      if (l.status !== "wartet_freigabe") {
+      if (l.status !== "wartet_freigabe" && l.status !== "wartet_kontingent") {
         _statistik(tid, l.agentId, (s) => { s.laeufe++; if (l.status === "fertig") s.erfolgreich++; s.werkzeuge += l.zaehler.werkzeuge; });
         if (!l.eltern) melde({ mandant: tid, lauf: id, status: l.status, agent: l.agentName, ziel: kurz(l.ziel, 120), ergebnis: kurz(l.ergebnis || l.fehler, 300) });
       }
@@ -958,7 +976,10 @@ function createEngine(opt) {
         zaehle(l.mandant, "llm", tok, Number(r.kostenChf) || 0);
         if (r.modell) l.modellZuletzt = kurz(r.anbieter ? r.anbieter + "/" + r.modell : r.modell, 80);
         return text;
-      } catch (e) { letzter = e; if (z.abbruch) throw new Error("Gestoppt"); await schlafe(Math.min(30000, 1500 * Math.pow(2, v2)), z.ctrl.signal); }
+      } catch (e) {
+        if (e && e.code === "KONTINGENT") throw e;      // Router: Gratis-Kontingent/Freigabe fehlt -> Lauf pausiert (kein Bezahl-Fallback)
+        letzter = e; if (z.abbruch) throw new Error("Gestoppt"); await schlafe(Math.min(30000, 1500 * Math.pow(2, v2)), z.ctrl.signal);
+      }
     }
     throw new Error("Modell nicht erreichbar: " + (letzter && letzter.message));
   }
@@ -1167,6 +1188,13 @@ function createEngine(opt) {
     for (;;) {
       if (eltern && eltern.abbruch) { stoppe(tid, k.id, "system"); throw new Error("Gestoppt"); }
       const r = await ausfuehren(tid, k.id, l.id);
+      if (r.status === "wartet_kontingent") {
+        log(l, "pause", { x: "Team-Agent wartet auf Gratis-Kontingent bis " + iso(r.weiterAb) }); laufSpeichern(l);
+        await schlafe(Math.max(1000, (r.weiterAb || jetzt() + 60000) - jetzt()), eltern && eltern.ctrl.signal);
+        if (eltern && eltern.abbruch) { stoppe(tid, k.id, "system"); throw new Error("Gestoppt"); }
+        const kl = laufLaden(tid, k.id); if (kl.status === "wartet_kontingent") { kl.status = "wartet"; laufSpeichern(kl); }
+        continue;
+      }
       if (r.status === "wartet_freigabe") {
         // Kind wartet auf Menschen: Eltern wartet mit
         await new Promise((ok) => { kindWarter.set(k.id, ok); const t = setInterval(() => { if (!eltern || eltern.abbruch) { clearInterval(t); ok(); } }, 1000); kindWarter.set(k.id, () => { clearInterval(t); ok(); }); });
@@ -1181,6 +1209,7 @@ function createEngine(opt) {
   function stoppe(tid, id, akteur) {
     const z = aktive.get(id);
     const i = warteschlange.findIndex((x) => x.id === id); if (i >= 0) warteschlange.splice(i, 1);
+    kontingentWarter.delete(id);
     if (z && z.tid === tid) { z.abbruch = true; try { z.ctrl.abort(); } catch (e) {} for (const k of z.kinder) { try { k(); } catch (e) {} } }
     let l; try { l = laufLaden(tid, id); } catch (e) { return { ok: false }; }
     if (!["fertig", "fehler", "gestoppt"].includes(l.status)) {
@@ -1203,7 +1232,11 @@ function createEngine(opt) {
 
   /* ---------- Neustart: offene Laeufe wieder aufnehmen ---------- */
   function wiederaufnehmen() {
-    for (const m of mandanten()) for (const k of laeufeListe(m.id)) if ((k.status === "laeuft" || k.status === "wartet") && !k.eltern) einreihen(m.id, k.id);
+    for (const m of mandanten()) for (const k of laeufeListe(m.id)) {
+      if (k.eltern) continue;
+      if (k.status === "laeuft" || k.status === "wartet") einreihen(m.id, k.id);
+      else if (k.status === "wartet_kontingent") { const l = laufLaden(m.id, k.id); kontingentWarter.set(k.id, { tid: m.id, ab: l.weiterAb || jetzt() }); }
+    }
   }
 
   /* ---------- OpenClaw (nur Betreiber konfiguriert, pro Mandant freigeschaltet) ---------- */

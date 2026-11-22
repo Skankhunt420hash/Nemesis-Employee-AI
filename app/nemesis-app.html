@@ -66,6 +66,8 @@
   <label>API-Schl&uuml;ssel <span style="text-transform:none;letter-spacing:0;color:#aaa">(bei Ollama/LM Studio leer lassen)</span></label>
   <input id="nxKey" type="password" placeholder="sk-...">
   <div id="nxKeyHint" style="font-size:12px;color:#FFD23F;margin-top:4px;display:none"></div>
+  <label style="display:flex;gap:10px;align-items:flex-start;text-transform:none;letter-spacing:0;font-family:inherit;font-size:13.5px;color:#EDEDF5;margin-top:14px">
+    <input type="checkbox" id="nxKostenOk" style="width:auto;margin-top:3px"> <span>Ich erlaube Direktaufrufe mit diesem Schl&uuml;ssel. Sie k&ouml;nnen beim Anbieter <b>Kosten</b> verursachen. Ohne H&auml;kchen l&auml;uft alles &uuml;ber den Nemesis-Server, und der nutzt nur freigegebene Gratis-Modelle.</span></label>
 
   <label style="margin-top:16px">Endpunkt <span style="text-transform:none;letter-spacing:0;color:#aaa">(automatisch gef&uuml;llt)</span></label>
   <input id="nxEndpoint" placeholder="https://api.anthropic.com/v1/messages">
@@ -166,7 +168,7 @@ window.storage = {
 window.NX = {
   cfg(){ try { return JSON.parse(localStorage.getItem("nx:cfg")||"{}"); } catch(e){ return {}; } },
   open(){ const c=this.cfg();
-    nxEndpoint.value=c.endpoint||""; nxModel.value=c.model||""; nxKey.value=c.key||"";
+    nxEndpoint.value=c.endpoint||""; nxModel.value=c.model||""; nxKey.value=c.key||""; var ko=document.getElementById("nxKostenOk"); if(ko) ko.checked=c.kostenOk===true;
     var ms=document.getElementById("nxModelSelect"); if(ms){ms.innerHTML="<option value=''>"+(c.model?"Gespeichert: "+c.model:"— Anbieter wählen →")+"</option>";}
     var kh=document.getElementById("nxKeyHint"); if(kh) kh.style.display="none";
     var cl={}; try{ cl=JSON.parse(localStorage.getItem("nx:cloud")||"{}"); }catch(e){}
@@ -178,7 +180,7 @@ window.NX = {
   PROVIDERS:{
     nemesis:{
       url:"",
-      hint:"Laeuft ueber deinen Server mit dessen Schluesseln. Gratis-Modelle zuerst, OpenAI nur als Rettung. Kein Key noetig.",
+      hint:"Laeuft ueber deinen Server. Nur freigegebene Gratis-Modelle, kein automatischer Wechsel auf bezahlte. OpenAI nur nach Freigabe in der Zentrale (Modelle & Kosten). Kein Key noetig.",
       models:[
         {v:"auto",l:"Automatisch (beste Wahl je Aufgabe) ⭐"},
         {v:"gemini",l:"Gemini Flash (langer Kontext)"},
@@ -188,8 +190,8 @@ window.NX = {
         {v:"llama",l:"Llama 3.3 70B"},
         {v:"cohere",l:"Cohere Command"},
         {v:"mistral",l:"Mistral Small"},
-        {v:"gpt54mini",l:"GPT-5.4 mini (OpenAI-Abo)"},
-        {v:"gpt55",l:"GPT-5.5 (OpenAI-Abo)"}
+        {v:"gpt54mini",l:"GPT-5.4 mini (kostenpflichtig, nur mit Freigabe)"},
+        {v:"gpt55",l:"GPT-5.5 (kostenpflichtig, nur mit Freigabe)"}
       ]
     },
     anthropic:{
@@ -311,7 +313,7 @@ window.NX = {
   save(){
     const ep=nxEndpoint.value.trim(), nem=/\/llm\/?$/.test(ep);
     localStorage.setItem("nx:cfg", JSON.stringify({
-      provider: nem?"nemesis":"", endpoint:ep, model:(nxModel.value.trim()||(nem?"auto":"")), key: nem?"":nxKey.value.trim()
+      provider: nem?"nemesis":"", endpoint:ep, model:(nxModel.value.trim()||(nem?"auto":"")), key: nem?"":nxKey.value.trim(), kostenOk: !nem && !!(document.getElementById("nxKostenOk")||{}).checked
     }));
     localStorage.setItem("nx:cloud", JSON.stringify({
       url:nxCloudUrl.value.trim().replace(/\/+$/,""), raum:(nxCloudRaum.value.trim()||"nemesis")
@@ -682,6 +684,10 @@ async function ask(messages, system, maxTokens = 1200) {
     routen.push(viaServer);
   } else if (!cfg.key && !isLocal) {
     if (!viaServer) throw new Error("Kein Schluessel hinterlegt - tippe unten rechts auf das Zahnrad.");
+    routen.push(viaServer);
+  } else if (!isLocal && cfg.kostenOk !== true) {
+    // Kostenregel: ein gespeicherter Schluessel ist keine Kostenfreigabe
+    if (!viaServer) throw new Error("Direktaufruf mit eigenem Schluessel ist nicht erlaubt: im Zahnrad 'Ich erlaube Direktaufrufe' ankreuzen oder den Nemesis-Server (gratis) waehlen.");
     routen.push(viaServer);
   } else {
     const anthropic = endpoint.indexOf("anthropic") > -1;

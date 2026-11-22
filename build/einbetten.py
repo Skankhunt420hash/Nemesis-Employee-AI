@@ -26,15 +26,21 @@ einsetzen(js, "const APP_LAUFZEIT = " + json.dumps(lz, ensure_ascii=False) + ";"
 einsetzen(os.path.join(r, "app", "nemesis-app.html"), "const LAUFZEIT_SRC = " + json.dumps(lz.replace("</", "<\\/"), ensure_ascii=False) + ";")
 print("Laufzeit eingebettet:", len(lz), "Bytes")
 
-# Agenten-Zentrale (app/agenten/) in nemesis-app.js einbetten
+# Agenten-Zentrale (app/agenten/**) in nemesis-app.js einbetten: alle Module + Oberflaeche
 ad = os.path.join(r, "app", "agenten")
 import hashlib
-quellen = {n: open(os.path.join(ad, d), encoding="utf8").read() for n, d in [("engine", "engine.js"), ("http", "http.js"), ("html", "zentrale.html")]}
-quellen["version"] = hashlib.sha256("".join(quellen[k] for k in ["engine", "http", "html"]).encode()).hexdigest()[:12]
+module = {}
+for wurzel, _, dateien in os.walk(ad):
+    for d in sorted(dateien):
+        if d.endswith(".js"):
+            voll = os.path.join(wurzel, d)
+            module[os.path.relpath(voll, ad).replace(os.sep, "/")] = open(voll, encoding="utf8").read()
+quellen = {"module": dict(sorted(module.items())), "html": open(os.path.join(ad, "zentrale.html"), encoding="utf8").read()}
+quellen["version"] = hashlib.sha256(json.dumps(quellen, sort_keys=True).encode()).hexdigest()[:12]
 t = open(js, encoding="utf8").read()
 if "/*AGENTEN-START*/" not in t:
     sys.exit("AGENTEN-Marker fehlt")
 blk = "/*AGENTEN-START*/\nconst AGENTEN_SRC = " + json.dumps(quellen, ensure_ascii=False) + ";\n/*AGENTEN-ENDE*/"
 t = re.sub(r"/\*AGENTEN-START\*/.*?/\*AGENTEN-ENDE\*/", lambda m: blk, t, flags=re.S)
 open(js, "w", encoding="utf8").write(t)
-print("Agenten-Zentrale eingebettet:", len(blk), "Bytes, Version", quellen["version"])
+print("Agenten-Module eingebettet:", ", ".join(sorted(module)), "| Version", quellen["version"])

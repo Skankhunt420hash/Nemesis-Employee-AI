@@ -302,3 +302,24 @@ test("Sandbox: kein Netz bei Befehlen, Zeitlimit, nicht erlaubte Befehle", { ski
 test("Werkzeugkatalog vollstaendig klassifiziert", () => {
   for (const w of Object.values(W)) { assert.ok(["lesen", "schreiben", "ausfuehren", "destruktiv", "extern"].includes(w.art), w.name); assert.ok(w.timeoutMs > 0); assert.ok(typeof w.run === "function"); }
 });
+
+test("Phase 1: Gratis-Kontingent erschoepft -> Lauf pausiert (kein Fehler, kein Bezahl-Fallback) und laeuft automatisch weiter", async () => {
+  let n = 0, aufrufe = 0;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nx-kont-"));
+  const e = createEngine({ dir, sandbox: { modus: "aus" }, kontingentPruefMs: 50, kontingentMinPauseMs: 0, llm: async () => {
+    aufrufe++;
+    if (n++ === 1) throw Object.assign(new Error("Gratis-Kontingente erschoepft"), { code: "KONTINGENT", grund: "KONTINGENT_ERSCHOEPFT", wiederAb: Date.now() + 300 });
+    return { text: JSON.stringify(n === 1 ? plan("a") : n === 3 ? tu("datei_schreiben", { pfad: "x.txt", inhalt: "ok" }) : { fertig: true, ergebnis: "fertig nach Pause" }) };
+  } });
+  const { mandant } = e.mandantNeu({ name: "Kontingent AG", demoDaten: false });
+  e.agentSpeichern(mandant.id, { name: "Kim", autonomie: 3, werkzeuge: { datei_schreiben: "autonom" } }, "t");
+  const l0 = e.laufStarten(mandant.id, { agent: "Kim", ziel: "Datei schreiben trotz Limit", stunden: 0.1 }, "t");
+  const p = await warteBis(e, mandant.id, l0.id, ["wartet_kontingent", "fehler", "fertig"], 5000);
+  assert.strictEqual(p.status, "wartet_kontingent", p.fehler);
+  assert.ok(p.log.some((x) => x.typ === "pause"));
+  assert.strictEqual(e.aktive.length, 0, "pausierter Lauf belegt keinen Slot");
+  const l = await warteBis(e, mandant.id, l0.id, ["fertig", "fehler"], 5000);
+  assert.strictEqual(l.status, "fertig", l.fehler);
+  assert.strictEqual(aufrufe, 4, "keine wiederholten Versuche waehrend der Pause");
+  assert.ok(e.auditLesen(mandant.id).some((a) => a.aktion === "lauf.pausiert_kontingent"));
+});
