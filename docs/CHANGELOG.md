@@ -2,6 +2,11 @@
 
 Alle Änderungen liegen auf dem Entwicklungsbranch `ccr-45791acd-iy1q1j`; `main` (Produktion) ist unverändert.
 
+## 24.11.2026: Master Development Plan V1.0, Phase 2 (OmniRoute Intelligence Network)
+- OmniRoute als Anbieter im Kosten-Gate (Preis 0 + freigegebener offizieller Präfix oder bestätigte eigene Modelle; `auto/*`, unbekannte Preise, Web-Zugänge gesperrt); lokale Modelle; Modi FREE/LOCAL/PREMIUM/AUS; Pausen pro OmniRoute-Modell; Anfrage-Protokoll; Leistungstest; Modell-Bibliothek; transparenter Ersatz bei gesperrter Modellwahl.
+- Fixes: Absturz bei Anbietern ohne `.env`-Schlüssel (Start-Stack-Test), Handy-Layout (Modelle und Office breiter als der Bildschirm; die untere Leiste ragte aus dem Bild).
+- Tests: 71/71 inkl. echter Anfrage über OmniRoute 3.8.54 und Handy-Test aller 14 Seiten.
+
 ## 24.11.2026: Master Development Plan V1.0, Phase 1 (Foundation & Self-Healing)
 - **Neu:** Integrationsverwaltung `app/agenten/integrationen/` für OmniRoute, OpenHands und OpenClaw: einzeln aktivierbar, Adresse frei wählbar (Worker-PC), Schlüssel im Tresor, Verbindungstests nur über dokumentierte Endpunkte, verständliche Fehlermeldungen. Prüft auch, ob ein Dienst **ungeschützt** erreichbar ist.
 - **Neu:** Systemstatus (echte Messwerte: Node, RAM, Speicher, Schreibrechte, Sandbox, Aufträge, Gratis-Modelle, Integrationen) und Reparaturfunktionen (Aufträge, Anbieter-Pausen, Modell-Listen).

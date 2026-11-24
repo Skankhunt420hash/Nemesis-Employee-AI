@@ -12,12 +12,12 @@ Adress-Regel: `http://` nur für lokale/private Adressen (127.x, 10.x, 192.168.x
 | Lizenz | MIT |
 | Geprüfte Version | **3.8.54** (24.11.2026), Node ≥ 22.22.2 |
 | Doku-Quellen | `docs/reference/API_REFERENCE.md`, `docs/guides/HEADLESS.md` im offiziellen Repo |
-| Genutzte Endpunkte | `GET /api/monitoring/health` (öffentlich) · `GET /v1/models` (Bearer, Katalog mit `pricing` in USD/Token) · `POST /v1/chat/completions` (Phase 2) · Antwort-Header `X-OmniRoute-Decision` |
+| Genutzte Endpunkte | `GET /api/monitoring/health` (öffentlich) · `GET /v1/models` (Bearer, Katalog mit `pricing` in USD/Token) · `POST /v1/chat/completions` (Bearer) · Antwort-Header `X-OmniRoute-Decision` · Für Tests/Einrichtung (Verwaltung, Sitzung per `POST /api/auth/login`): `POST /api/keys`, `POST /api/provider-nodes` (OpenAI-kompatibler Knoten), `POST /api/providers` (Verbindung), `POST /api/providers/{id}/test` |
 | Auth | `Authorization: Bearer <OmniRoute-API-Key>`. Schlüssel per Verwaltungs-API `POST /api/keys` nach `POST /api/auth/login` (Passwort aus `INITIAL_PASSWORD`) |
 | Start (Server) | `DATA_DIR=… OMNIROUTE_HEADLESS=1 OMNIROUTE_SERVER_HOST=127.0.0.1 REQUIRE_API_KEY=true INITIAL_PASSWORD=… JWT_SECRET=… API_KEY_SECRET=… omniroute serve --headless --port 20128` |
 | Ressourcen (gemessen) | Installation ≈ **3 GB** (npm, 1329 Pakete); RAM im Leerlauf ≈ **510–660 MB** (2 Prozesse) |
 | Kostenregel in NEMESIS | Gratis nur bei Preis 0 laut `/v1/models`. Kein `pricing` (z.B. `auto/*`-Kombis) = unbekannt = gesperrt. |
-| Getestet | ✅ **echt**: Health 200, `/v1/models` ohne Schlüssel 401, mit Schlüssel 200 (247 Modelle; 7 mit Preis 0, 127 kostenpflichtig, 113 ohne Preis), Chat ohne Schlüssel 401, falscher Schlüssel → Warnung. ✅ Vertragstests. ❌ **Noch kein echter Chat-Aufruf** (Phase 2) |
+| Getestet | ✅ **echt**: Health 200, `/v1/models` ohne Schlüssel 401, mit Schlüssel 200 (247 Modelle; 7 mit Preis 0, 127 kostenpflichtig, 113 ohne Preis), Chat ohne Schlüssel 401, falscher Schlüssel → Warnung. ✅ Vertragstests. ✅ **echt (Phase 2):** Chat NEMESIS → OmniRoute → lokaler Test-Anbieter mit `X-OmniRoute-Decision`; `ddgw` wird auch beim echten OmniRoute nicht angefragt. ⛔ Echte Gratis-Cloud-Anbieter: kein Schlüssel. **Hinweis:** Selbst angelegte Knoten-Modelle erscheinen nicht im Katalog (kein Preis) → nur als vom Admin bestätigtes „eigenes Modell“ nutzbar. |
 | Wichtiger Befund | Die 7 Modelle mit Preis 0 im Werkszustand kommen von `ddgw/…` (nach Namen und OmniRoute-README ein Zugang über die DuckDuckGo-Weboberfläche, also **keine offizielle API**) und `unc/…` (Herkunft noch ungeprüft). Phase 2 lässt nur Anbieter aus einer Freigabeliste offizieller API-Zugänge zu; alles andere bleibt gesperrt. Echte Gratis-Modelle erfordern das Verbinden eigener Anbieter-Konten (z.B. Groq, Gemini, OpenRouter `:free`) im OmniRoute-Dashboard bzw. über die Verwaltungs-API. |
 
 ## OpenHands: Software-Ausführung

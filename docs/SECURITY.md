@@ -34,7 +34,7 @@ Stand 24.11.2026. Grundsatz: **Sicherheit sitzt im Code auf dem Server, nicht im
 | S11 | 🟡 | Eine OpenClaw-Instanz für alle Mandanten | Ein Benutzer (Betreiber) aktuell unkritisch; bei Kunden: Instanz pro Kunde |
 | S12 | ⚪ | CSP mit `'unsafe-inline'`; Kunden-Token im `localStorage` | später |
 | I1 | 🟠 | **OpenHands-Laufzeit `local`** führt Code auf dem Rechner des Agent Servers aus | Agent Server nur auf isoliertem Worker/Container; Phase 3 prüft Docker-Workspaces |
-| I2 | 🟡 | **OmniRoute** listet Web-Zugänge (z.B. `ddgw`) mit Preis 0 → inoffizielle Nutzung | Phase 2: nur Anbieter aus einer Freigabeliste offizieller APIs |
+| I2 ✅ | 🟡 | **OmniRoute** listet Web-Zugänge (z.B. `ddgw`) mit Preis 0 | Behoben (Phase 2): nur vom Admin mit Begründung freigegebene Präfixe; getestet auch gegen echtes OmniRoute |
 | I3 | 🟡 | OmniRoute-Verwaltungs-API bleibt im Headless-Modus erreichbar (laut Doku keine Sicherheitsgrenze) | Nur an 127.0.0.1 binden, `REQUIRE_API_KEY=true`, starke Secrets |
 
 Behoben (früher): S1/S2/S3 (Kosten-Fallbacks), S9 (Lab-Direktaufruf), S13 (verwaiste Delegationen), Sandbox-Ausbruch `logic.js`.
