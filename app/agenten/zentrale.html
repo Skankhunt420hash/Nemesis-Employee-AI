@@ -30,7 +30,9 @@ nav.seite button.an{background:linear-gradient(90deg,rgba(255,45,120,.16),rgba(2
 nav.seite .ic{width:20px;text-align:center;opacity:.9}
 nav.seite .zahl{margin-left:auto;background:var(--pink);color:#08080F;border-radius:20px;font-size:11px;font-weight:700;padding:1px 7px}
 nav.seite .fuss{margin-top:auto;padding:12px;font-size:12px;color:var(--text3);border-top:1px solid var(--linie)}
-main{padding:28px clamp(16px,3vw,40px) 120px;max-width:1280px;width:100%}
+main{padding:28px clamp(16px,3vw,40px) 120px;max-width:1280px;width:100%;min-width:0}
+.karte,.raster>*{min-width:0}
+td,.mono,.mailtext,.hinweis,.kopf p,.chip{overflow-wrap:anywhere}
 .kopf{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:22px}
 .kopf h1{font-size:26px;margin:0;letter-spacing:-.3px}
 .kopf p{margin:4px 0 0;color:var(--text2)}
@@ -115,11 +117,14 @@ iframe.vorschau{width:100%;height:520px;border:1px solid var(--linie);border-rad
 @media (max-width:760px){
   .app{grid-template-columns:1fr}nav.seite{display:none}
   main{padding:18px 16px 110px}
-  .unten{display:flex;position:fixed;bottom:0;left:0;right:0;background:rgba(8,8,14,.96);backdrop-filter:blur(8px);border-top:1px solid var(--linie);z-index:50;padding:6px 4px calc(6px + env(safe-area-inset-bottom));overflow-x:auto}
-  .unten button{all:unset;flex:1 0 64px;text-align:center;font-size:10.5px;color:var(--text2);padding:4px 2px;position:relative}
+  .karte{overflow-x:auto}
+  .kopf .rechts{margin-left:0;width:100%}
+  .chip{white-space:normal}
+  .unten{display:flex;position:fixed;bottom:0;left:0;right:0;background:rgba(8,8,14,.96);backdrop-filter:blur(8px);border-top:1px solid var(--linie);z-index:50;padding:6px 4px calc(6px + env(safe-area-inset-bottom))}
+  .unten button{all:unset;flex:1 1 0;min-width:0;text-align:center;font-size:10.5px;color:var(--text2);padding:4px 2px;position:relative;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .unten button .ic{display:block;font-size:18px}
   .unten button.an{color:var(--pink)}
-  .unten .zahl{position:absolute;top:0;right:14px;background:var(--pink);color:#08080F;border-radius:10px;font-size:9px;padding:0 5px;font-weight:700}
+  .unten .zahl{position:absolute;top:0;right:8px;background:var(--pink);color:#08080F;border-radius:10px;font-size:9px;padding:0 5px;font-weight:700}
   .kopf h1{font-size:22px}.kpi .wert{font-size:24px}
   table.t.mobil thead{display:none}table.t.mobil tr{display:block;border-bottom:1px solid var(--linie);padding:8px 0}table.t.mobil td{display:block;border:0;padding:3px 4px}
 }
@@ -204,7 +209,7 @@ const SEITEN = [
 ];
 function nav() {
   const fr = (S.daten.uebersicht && S.daten.uebersicht.freigaben) || 0;
-  const liste = SEITEN.concat(S.ich && S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"], ["modelle", "⚡", "Modelle & Kosten"], ["integrationen", "⧉", "Integrationen"], ["system", "♥", "Systemstatus"]] : []);
+  const liste = SEITEN.concat(S.ich && S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"], ["modelle", "⚡", "Modelle & Kosten"], ["bibliothek", "▦", "Modell-Bibliothek"], ["integrationen", "⧉", "Integrationen"], ["system", "♥", "Systemstatus"]] : []);
   const knopf = (s, kl) => `<button class="${S.seite === s[0] ? "an" : ""}" data-seite="${s[0]}"><span class="ic">${s[1]}</span>${kl ? "" : ""}${esc(s[2])}${s[0] === "freigaben" && fr ? `<span class="zahl">${fr}</span>` : ""}</button>`;
   return `<nav class="seite"><div class="marke"><svg width="30" height="30" viewBox="0 0 64 64"><path d="M32 6 L58 32 L32 58 L6 32 Z" fill="none" stroke="#FF2D78" stroke-width="5"/><path d="M32 20 L44 32 L32 44 L20 32 Z" fill="#22E0FF"/></svg><div>NEMESIS<small>ZENTRALE</small></div></div>
     ${liste.map((s) => knopf(s)).join("")}
@@ -212,7 +217,7 @@ function nav() {
   <div class="unten">${liste.slice(0, 4).map((s) => `<button class="${S.seite === s[0] ? "an" : ""}" data-seite="${s[0]}"><span class="ic">${s[1]}</span>${esc(s[2])}${s[0] === "freigaben" && fr ? `<span class="zahl">${fr}</span>` : ""}</button>`).join("")}<button class="${liste.slice(4).some((x) => x[0] === S.seite) ? "an" : ""}" data-mehr><span class="ic">☰</span>Mehr</button></div>`;
 }
 function mandantWahl() {
-  if (!S.ich || S.ich.rolle !== "admin" || ["modelle", "integrationen", "system"].includes(S.seite)) return "";
+  if (!S.ich || S.ich.rolle !== "admin" || ["modelle", "bibliothek", "integrationen", "system"].includes(S.seite)) return "";
   return `<select class="mandantwahl" id="tidwahl">${S.mandanten.length ? "" : "<option>– kein Kunde –</option>"}${S.mandanten.map((m) => `<option value="${esc(m.id)}" ${m.id === S.tid ? "selected" : ""}>${esc(m.name)}${m.politik && m.politik.demo ? " · Demo" : ""}</option>`).join("")}</select>`;
 }
 function kopf(titel, unter, rechts) { return `<div class="kopf"><div><h1>${titel}</h1>${unter ? `<p>${unter}</p>` : ""}</div><div class="rechts">${rechts || ""}${mandantWahl()}</div></div>`; }
@@ -223,7 +228,7 @@ async function zeichne() {
   if (!S.ich) return;
   let inhalt = "";
   try {
-    if (!["mandanten", "modelle", "integrationen", "system"].includes(S.seite) && !S.tid) inhalt = kopf("Willkommen") + `<div class="karte leer">Noch kein Kunde angelegt. ${S.ich.rolle === "admin" ? '<br><br><button class="knopf pri" data-seite="mandanten">Ersten Pilotkunden anlegen</button>' : ""}</div>`;
+    if (!["mandanten", "modelle", "bibliothek", "integrationen", "system"].includes(S.seite) && !S.tid) inhalt = kopf("Willkommen") + `<div class="karte leer">Noch kein Kunde angelegt. ${S.ich.rolle === "admin" ? '<br><br><button class="knopf pri" data-seite="mandanten">Ersten Pilotkunden anlegen</button>' : ""}</div>`;
     else inhalt = await (SEITE[S.seite] || SEITE.uebersicht)();
   } catch (e) { inhalt = kopf("Fehler") + `<div class="hinweis rot">${esc(e.message)}</div>`; }
   const notaus = S.ich.notaus ? `<div class="notaus"><b>⛔ NOTAUS AKTIV</b><span class="mut">Alle Agenten sind gestoppt, neue Aufträge gesperrt.</span>${S.ich.rolle === "admin" ? '<button class="knopf klein" id="notausAus" style="margin-left:auto">Notaus aufheben</button>' : ""}</div>` : "";
@@ -484,6 +489,20 @@ async function openclawKarte() {
     <button class="knopf pri" data-ocspeichern style="margin-left:auto">Speichern & prüfen</button></div></div>`;
 }
 
+SEITE.bibliothek = async () => {
+  S.auto = 0;
+  if (S.ich.rolle !== "admin") return kopf("Kein Zugriff");
+  const b = await api("/modelle/bibliothek"), an = (await api("/modelle/anfragen?n=40")).anfragen;
+  const erlaubt = b.modelle.filter((m) => m.erlaubt), gesperrt = b.modelle.filter((m) => !m.erlaubt);
+  const zeile = (m) => `<tr><td><span class="chip">${esc(m.anbieter)}</span> <span class="mono">${esc(m.id)}</span></td><td class="klein">${esc(m.klasse)}${m.grund ? `<div class="mut">${esc(m.grund)}</div>` : ""}</td>
+    <td class="klein mut">${m.faehigkeiten.kontext ? Math.round(m.faehigkeiten.kontext / 1000) + "k" : "?"} · JSON ${m.faehigkeiten.json === true ? "✓" : "?"} · Tools ${m.faehigkeiten.tools === true ? "✓" : "?"}${m.faehigkeiten.vision ? " · Bild" : ""}</td>
+    <td class="klein">${m.leistung ? (m.leistung.ok ? `${m.leistung.ms} ms · JSON ${m.leistung.json ? "✓" : "✗"} · ${m.leistung.korrekt ? "korrekt" : "falsch"}` : `<span class="chip err">${esc(m.leistung.fehler || "Fehler")}</span>`) + `<div class="mut">${zeit(m.leistung.zeit)}</div>` : '<span class="mut">–</span>'}</td>
+    <td>${m.erlaubt ? `<button class="knopf klein" data-ltest="${esc(m.anbieter)}" data-lmodell="${esc(m.id)}">Testen</button>` : ""}</td></tr>`;
+  return kopf("Modell-Bibliothek", "Alle Modelle deiner Anbieter: welche gratis nutzbar sind, was sie können, wie schnell sie sind. Modus: " + esc(b.modus.toUpperCase())) +
+  `<div class="karte"><h3>Nutzbar (${erlaubt.length})</h3>${erlaubt.length ? `<table class="t mobil"><thead><tr><th>Modell</th><th>Kosten</th><th>Fähigkeiten (Annahme)</th><th>Leistungstest</th><th></th></tr></thead><tbody>${erlaubt.map(zeile).join("")}</tbody></table>` : '<div class="leer">Kein Gratis-Modell nutzbar. Unter Lab → KI-Schlüssel einen Gratis-Anbieter eintragen oder OmniRoute einrichten.</div>'}</div>
+  <details class="karte" style="margin-top:14px"><summary style="cursor:pointer"><b>Gesperrt (${gesperrt.length})</b> <span class="mut klein">kostenpflichtig, inoffiziell oder Preis unbekannt</span></summary>${gesperrt.length ? `<table class="t mobil" style="margin-top:8px"><tbody>${gesperrt.slice(0, 150).map(zeile).join("")}</tbody></table>` : ""}</details>
+  <div class="karte" style="margin-top:14px"><h3>Letzte Modellanfragen (Protokoll)</h3>${an.length ? `<table class="t mobil"><thead><tr><th>Zeit</th><th>Modell</th><th>Ergebnis</th><th>Dauer</th><th>Routing</th></tr></thead><tbody>${an.map((x) => `<tr><td class="mono klein">${zeit(x.t)}</td><td class="klein"><span class="chip">${esc(x.anbieter)}</span> ${esc(x.modell)}<div class="mut">${esc(x.quelle)} · ${esc(x.klasse)}</div></td><td>${x.ok ? '<span class="chip ok">ok</span>' : `<span class="chip err">${esc(x.status)}</span><div class="mut klein">${esc(x.fehler)}</div>`}</td><td class="mono klein">${x.ms != null ? x.ms + " ms" : "–"} · ${x.tokens} Tok</td><td class="mono klein mut">${esc(x.entscheidung || "")}</td></tr>`).join("")}</tbody></table>` : '<div class="leer">Noch keine Anfragen.</div>'}</div>`;
+};
 SEITE.modelle = async () => {
   S.auto = 0;
   if (S.ich.rolle !== "admin") return kopf("Kein Zugriff");
@@ -496,7 +515,15 @@ SEITE.modelle = async () => {
       ${a.preisPruefung ? `<button class="knopf klein" data-mverif="${a.id}">Preise prüfen</button>` : ""}
       <button class="knopf klein" data-mlim="${a.id}" data-rpm="${a.limits.rpm || 0}" data-rpd="${a.limits.rpd || 0}">Limits</button></td></tr>`).join("");
   return kopf("Modelle & Kosten", "Alle Gratis-Anbieter rotieren automatisch: ist einer leer, übernimmt der nächste. OpenAI und Claude sind nicht in der Rotation.") +
-  `<div class="hinweis cy" style="margin-bottom:14px">Modus: <b>${m.modus === "nur-gratis" ? "Nur Gratis" : "Aus"}</b>. Ist das Gratis-Kontingent erschöpft, pausieren Aufträge und laufen automatisch weiter, sobald wieder Kontingent frei ist.</div>
+  `<div class="karte" style="margin-bottom:14px"><h3>Betriebsmodus</h3><div class="wahl">${Object.entries(m.modi).map(([k, t]) => `<button class="${m.modus === k ? "an" : ""}" data-mmodus="${k}">${esc(k.toUpperCase())}</button>`).join("")}</div>
+    <div class="mut klein" style="margin-top:8px">${esc(m.modi[m.modus] || m.modus)}. Ist das Gratis-Kontingent erschöpft, pausieren Aufträge und laufen automatisch weiter. Kein automatischer Wechsel auf bezahlte Modelle.</div>
+    <div class="raster r2" style="margin-top:10px"><div><label class="f">Lokales Modell (Ollama/LM Studio, OpenAI-kompatibel)</label><input class="e" id="mLokal" value="${esc(m.lokalUrl)}" placeholder="http://127.0.0.1:11434/v1"></div><div style="align-self:end"><button class="knopf" data-mlokal>Speichern</button></div></div></div>
+  <div class="karte" style="margin-bottom:14px"><h3>OmniRoute-Katalog ${m.omniroute.katalog ? `<span class="chip ok">${m.omniroute.katalog.gratis} mit Preis 0</span>` : '<span class="chip">nicht geprüft</span>'}<button class="knopf klein" style="margin-left:auto" data-mverif="omniroute">Katalog prüfen</button></h3>
+    <div class="mut klein">Nur Modelle mit Preis 0 von <b>freigegebenen Anbietern mit offizieller API</b> oder bestätigte eigene Modelle werden genutzt. Kombis wie <span class="mono">auto/*</span> und Modelle ohne Preis bleiben gesperrt.</div>
+    ${m.omniroute.katalog ? `<table class="t" style="margin-top:8px"><tbody>${Object.entries(m.omniroute.katalog.praefixe).map(([pr, n]) => `<tr><td class="mono">${esc(pr)}/…</td><td>${n} Gratis-Modelle</td><td>${m.omniroute.praefixe.includes(pr) ? `<span class="chip ok">freigegeben</span> <button class="knopf klein" data-opraefix="${esc(pr)}" data-an="0">Sperren</button>` : `<span class="chip warn">gesperrt</span> <button class="knopf klein" data-opraefix="${esc(pr)}" data-an="1">Als offizielle API freigeben…</button>`}</td></tr>`).join("")}</tbody></table>` : ""}
+    <label class="f">Eigene kostenlose Modelle (z.B. eigener Server hinter OmniRoute)</label>
+    ${m.omniroute.eigene.map((e) => `<div class="zeile klein"><span class="mono">${esc(e.id)}</span><span class="mut">${esc(e.notiz)}</span><button class="knopf klein gefahr" data-oeigenweg="${esc(e.id)}">Entfernen</button></div>`).join("") || '<div class="mut klein">keine</div>'}
+    <div class="zeile" style="margin-top:6px"><input class="e" id="oEigen" placeholder="anbieter/modell" style="max-width:320px"><button class="knopf klein" data-oeigen>Hinzufügen…</button></div></div>
   <div class="karte"><h3>Anbieter</h3><table class="t mobil"><thead><tr><th>Anbieter</th><th>Schlüssel</th><th>Kosten-Status</th><th>Kontingent</th><th></th></tr></thead><tbody>${zeilen}</tbody></table></div>
   <div class="raster r2" style="margin-top:14px"><div class="karte"><h3>Kostenpflichtige Freigaben</h3>
     ${m.freigaben.length ? `<table class="t"><tbody>${m.freigaben.map((f) => `<tr><td><b>${esc(f.anbieter)}</b> <span class="mono">${esc(f.muster)}</span><div class="mut klein">Budget CHF ${f.budgetChfTag}/Tag · heute CHF ${f.heuteChf.toFixed(3)} · ${f.bis ? "bis " + zeit(f.bis) : "unbefristet"} · ${esc(f.von)}</div></td><td><button class="knopf klein gefahr" data-mfweg="${f.id}">Entziehen</button></td></tr>`).join("")}</tbody></table>` : '<div class="mut">Keine. Bezahlte Modelle sind gesperrt.</div>'}
@@ -575,7 +602,7 @@ function binde() {
       if (d.agent) return geh("agenten", { agentId: d.agent, tab: "" });
       if (d.tidwahl) { S.tid = d.tidwahl; merkeUi(); await laden(); return geh("uebersicht"); }
       if ("mehr" in d) {
-        const liste = SEITEN.concat(S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"], ["modelle", "⚡", "Modelle & Kosten"], ["integrationen", "⧉", "Integrationen"], ["system", "♥", "Systemstatus"]] : []);
+        const liste = SEITEN.concat(S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"], ["modelle", "⚡", "Modelle & Kosten"], ["bibliothek", "▦", "Modell-Bibliothek"], ["integrationen", "⧉", "Integrationen"], ["system", "♥", "Systemstatus"]] : []);
         const md = modal(`<h2 style="margin-top:0">Alle Bereiche</h2><div class="raster" style="grid-template-columns:1fr 1fr;gap:8px">${liste.map((x) => `<button class="knopf" style="justify-content:flex-start;padding:14px" data-mseite="${x[0]}"><span>${x[1]}</span> ${esc(x[2])}</button>`).join("")}</div><div style="text-align:right;margin-top:12px"><button class="knopf" data-zu>Schliessen</button></div>`);
         md.querySelectorAll("[data-mseite]").forEach((b) => b.onclick = () => { md.remove(); geh(b.dataset.mseite, { laufId: "", agentId: "", tab: "" }); });
         return;
@@ -607,6 +634,12 @@ function binde() {
       if (d.igtest) { t.disabled = true; t.textContent = "Teste…"; await api("/integrationen/" + d.igtest + "/test", {}); return zeichne(); }
       if (d.igschalt) { await api("/integrationen/" + d.igschalt, { aktiv: d.an === "1" }); if (d.an === "1") await api("/integrationen/" + d.igschalt + "/test", {}); return zeichne(); }
       if (d.rep) { const r = await api("/system/reparatur/" + d.rep, {}); toast(typeof r.bericht === "string" ? r.bericht : (r.bericht.neuEingereiht.length + " neu eingereiht, " + r.bericht.verwaistGestoppt.length + " verwaist gestoppt")); return zeichne(); }
+      if (d.mmodus) { const b = { modus: d.mmodus }; if (d.mmodus === "premium") { const x = prompt("PREMIUM erlaubt freigegebene Bezahlmodelle (nur bei ausdrücklicher Wahl, mit Budget). Zur Bestätigung PREMIUM eingeben:"); if (x !== "PREMIUM") return; b.bestaetigung = x; } await api("/modelle", b); toast("Modus: " + d.mmodus.toUpperCase()); return zeichne(); }
+      if ("mlokal" in d) { await api("/modelle", { lokalUrl: $("#mLokal").value.trim() }); toast("Gespeichert"); return zeichne(); }
+      if (d.opraefix) { const an = d.an === "1"; const notiz = an ? prompt("Warum ist '" + d.opraefix + "' ein offizieller API-Zugang ohne Kosten? (Pflicht, mind. 10 Zeichen)") : ""; if (an && !notiz) return; await api("/modelle", { omniroutePraefix: { praefix: d.opraefix, erlauben: an, notiz } }); return zeichne(); }
+      if ("oeigen" in d) { const id = $("#oEigen").value.trim(); if (!id) return; const notiz = prompt("Warum kostet '" + id + "' nichts? (z.B. eigener Server; Pflicht, mind. 10 Zeichen)"); if (!notiz) return; await api("/modelle", { omnirouteEigen: { id, notiz } }); return zeichne(); }
+      if (d.oeigenweg) { await api("/modelle", { omnirouteEigen: { id: d.oeigenweg, entfernen: true } }); return zeichne(); }
+      if (d.ltest) { t.disabled = true; t.textContent = "Teste…"; const r = (await api("/modelle/leistungstest", { anbieter: d.ltest, modell: d.lmodell })).ergebnis; toast(r.ok ? r.ms + " ms, JSON " + (r.json ? "ok" : "fehlt") + (r.korrekt ? ", korrekt" : "") : "Fehler: " + r.fehler, !r.ok); return zeichne(); }
       if (d.mschalt) { await api("/modelle", { schalten: { anbieter: d.mschalt, aus: d.aus === "1" } }); return zeichne(); }
       if (d.mbest) { const n = prompt("Wie hast du geprüft, dass " + d.mbest + " für dieses Konto keine API-Kosten verursacht? (z.B. 'Groq-Konto ohne Zahlungsmittel, Free Tier, 22.11.')"); if (n) { await api("/modelle", { bestaetigen: { anbieter: d.mbest, notiz: n } }); toast("Bestätigt"); zeichne(); } return; }
       if (d.mbzurueck) { await api("/modelle", { bestaetigen: { anbieter: d.mbzurueck, zuruecknehmen: true } }); return zeichne(); }

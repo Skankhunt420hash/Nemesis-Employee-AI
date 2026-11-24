@@ -92,12 +92,16 @@ function createHttp(engine, opt) {
       if (r === "/katalog" && !POST) return sende(res, 200, { werkzeuge: engine.werkzeugKatalog(), modi: engine.MODI.map((m) => ({ id: m, text: engine.MODUS_TEXT[m] })), autonomie: engine.AUTONOMIE, vorlagen: Object.keys(engine.VORLAGEN), vorlagenDaten: engine.VORLAGEN, modelle: opt.modelle ? opt.modelle() : ["auto"] }), true;
       if (r === "/mandanten" && !POST) { if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true; return sende(res, 200, { mandanten: engine.mandanten().map((m) => Object.assign(m, { offeneFreigaben: engine.freigabenListe(m.id).length, aktiv: engine.laeufeListe(m.id).filter((l) => ["laeuft", "wartet"].includes(l.status)).length })) }), true; }
       if (r === "/mandanten" && POST) { if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true; return sende(res, 200, engine.mandantNeu(await lies(req), "admin")), true; }
-      if (r === "/modelle" || r === "/modelle/verifizieren") {
+      if (r === "/modelle" || r.startsWith("/modelle/")) {
         if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true;
         if (!opt.router) return sende(res, 503, { error: "Modell-Router nicht verfuegbar" }), true;
+        if (r === "/modelle/bibliothek" && !POST) return sende(res, 200, await opt.router.bibliothek()), true;
+        if (r === "/modelle/anfragen" && !POST) return sende(res, 200, { anfragen: opt.router.anfragen(Math.min(500, Number(url.searchParams.get("n")) || 100)) }), true;
+        if (r === "/modelle/leistungstest" && POST) { const b = await lies(req); return sende(res, 200, { ergebnis: await opt.router.leistungstest(String(b.anbieter || ""), String(b.modell || "")) }), true; }
         if (r === "/modelle/verifizieren" && POST) return sende(res, 200, { ergebnis: await opt.router.verifiziere((await lies(req)).anbieter) }), true;
-        if (POST) return sende(res, 200, { modelle: opt.router.setze(await lies(req), "admin") }), true;
-        return sende(res, 200, { modelle: opt.router.status() }), true;
+        if (r === "/modelle" && POST) return sende(res, 200, { modelle: opt.router.setze(await lies(req), "admin") }), true;
+        if (r === "/modelle" && !POST) return sende(res, 200, { modelle: opt.router.status() }), true;
+        return sende(res, 404, { error: "Unbekannt" }), true;
       }
       if (r === "/system" || r.startsWith("/system/") || r === "/integrationen" || r.startsWith("/integrationen/")) {
         if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true;

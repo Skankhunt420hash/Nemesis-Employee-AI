@@ -65,6 +65,9 @@ test("Router: Kostenklassen und Gate (Einheit)", () => {
   assert.throws(() => R.setze({ bestaetigen: { anbieter: "openai", notiz: "ist doch gratis, bitte" } }, "admin"), /kann nicht als gratis/, "bezahlte Anbieter koennen nicht als gratis bestaetigt werden");
   assert.strictEqual(R.pruefe("openai", "gpt-4o-mini", { explizit: true }).code, "NICHT_FREIGEGEBEN");
   R.setze({ freigabe: { anbieter: "openai", muster: "gpt-4o-mini", budgetChfTag: 0.01, chfPro1MTokens: 10, bestaetigung: "Ich erlaube Kosten" } }, "admin");
+  assert.strictEqual(R.pruefe("openai", "gpt-4o-mini", { explizit: true }).code, "NICHT_FREIGEGEBEN", "FREE MODE sperrt Bezahlmodelle technisch, auch mit Freigabe");
+  assert.throws(() => R.setze({ modus: "premium" }, "admin"), /PREMIUM/, "Premium nur mit Bestaetigung");
+  R.setze({ modus: "premium", bestaetigung: "PREMIUM" }, "admin");
   assert.strictEqual(R.pruefe("openai", "gpt-4o-mini", { explizit: false }).code, "KEIN_AUTO_BEZAHLT", "nie als Fallback");
   assert.strictEqual(R.pruefe("openai", "gpt-4o-mini", { explizit: true }).ok, true);
   R.vorAufruf("openai"); R.nachAufruf("openai", "gpt-4o-mini", { ok: true, tokens: 2000 }); // 2000 Tok * 10 CHF/1M = 0.02 > 0.01
@@ -147,8 +150,9 @@ test("E2E: Admin schaltet einen Gratis-Anbieter ab -> er wird nicht mehr genutzt
   R.setze({ schalten: { anbieter: "openrouter", aus: false } }, "admin");
 });
 
-test("E2E: Bezahlmodell mit Freigabe nur bei ausdruecklicher Wahl, nie automatisch", async () => {
+test("E2E: Bezahlmodell mit Freigabe nur im PREMIUM MODE und nur bei ausdruecklicher Wahl, nie automatisch", async () => {
   const R = global.__nxApp.modellRouter;
+  R.setze({ modus: "premium", bestaetigung: "PREMIUM" }, "admin");
   R.setze({ freigabe: { anbieter: "openai", muster: "gpt-5.5", budgetChfTag: 2, chfPro1MTokens: 10, bestaetigung: "Ich erlaube Kosten" } }, "admin");
   verhalten.groq = "429"; verhalten.openrouter = "429";
   nullen();
@@ -158,6 +162,9 @@ test("E2E: Bezahlmodell mit Freigabe nur bei ausdruecklicher Wahl, nie automatis
   const exp = await frage({ modell: "gpt55" });
   assert.strictEqual(exp.status, 200, JSON.stringify(exp.body)); assert.strictEqual(exp.body.anbieter, "openai"); assert.strictEqual(exp.body.frei, false);
   assert.strictEqual(treffer.openai, 1);
+  R.setze({ modus: "free" }, "admin");
+  nullen(); const wiederFrei = await frage({ modell: "gpt55" });
+  assert.strictEqual(wiederFrei.status, 403, "zurueck im FREE MODE wieder gesperrt"); assert.strictEqual(treffer.openai, 0);
   verhalten.groq = "ok"; verhalten.openrouter = "ok";
 });
 
@@ -165,8 +172,10 @@ test("Kunden-Chat: Claude ist ohne Freigabe abgeschaltet (Rotator), trotz ANTHRO
   assert.strictEqual(process.env.NEMESIS_KUNDEN_KI, "rotator");
   const R = global.__nxApp.modellRouter;
   const st = R.setze({ freigabe: { anbieter: "anthropic", muster: "*", budgetChfTag: 1, chfPro1MTokens: 5, bestaetigung: "Ich erlaube Kosten" } }, "admin");
-  // Durchsetzen passiert ueber die Admin-API; hier direkt pruefen, dass die Freigabe erkannt wird
+  assert.ok(!R.erlaubtAnbieter("anthropic", { explizit: true }), "im FREE MODE trotz Freigabe nicht erlaubt");
+  R.setze({ modus: "premium", bestaetigung: "PREMIUM" }, "admin");
   assert.ok(R.erlaubtAnbieter("anthropic", { explizit: true }));
+  R.setze({ modus: "free" }, "admin");
   R.setze({ freigabe: { entfernen: st.freigaben.find((f) => f.anbieter === "anthropic").id } }, "admin");
   assert.ok(!R.erlaubtAnbieter("anthropic", { explizit: true }));
 });
@@ -177,7 +186,7 @@ test("Admin-API: nur Betreiber sieht und aendert Modelle; Kunde bekommt 403", as
   const b = "http://127.0.0.1:" + srv.address().port, Z = "/k/" + process.env.NEMESIS_ZUGANG;
   try {
     const st = await (await fetch(b + Z + "/zentrale/api/modelle")).json();
-    assert.strictEqual(st.modelle.modus, "nur-gratis");
+    assert.strictEqual(st.modelle.modus, "free");
     const gr = st.modelle.anbieter.find((a) => a.id === "groq"); assert.strictEqual(gr.schluessel, true); assert.strictEqual(gr.aus, false);
     const oa = st.modelle.anbieter.find((a) => a.id === "openai"); assert.strictEqual(oa.kosten, "bezahlt");
     const m = await (await fetch(b + Z + "/zentrale/api/mandanten", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Kunde Modelltest", demoDaten: false }) })).json();

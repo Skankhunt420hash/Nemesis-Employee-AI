@@ -51,7 +51,7 @@ test("Kernfunktionen erreichbar: Lab, Zentrale, Modelle, Betriebe, Schloss", asy
   assert.ok(sys.pruefungen.find((p) => p.name === "Daten schreibbar").status === "ok");
   assert.strictEqual((await get("/zentrale/api/system")).s, 401, "Systemstatus ohne Zugang gesperrt");
   assert.strictEqual((await get("/zentrale/api/integrationen")).s, 401);
-  const m = JSON.parse((await get(Z + "/zentrale/api/modelle")).t); assert.strictEqual(m.modelle.modus, "nur-gratis");
+  const m = JSON.parse((await get(Z + "/zentrale/api/modelle")).t); assert.strictEqual(m.modelle.modus, "free");
 });
 test("Kunden-Chat-Schutz: ohne Claude-Freigabe auf Gratis-Rotation (Prozess-Umgebung)", async () => {
   const r = await get("/k/" + ZUGANG + "/llm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }) });
