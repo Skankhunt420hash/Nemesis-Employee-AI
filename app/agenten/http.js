@@ -99,6 +99,18 @@ function createHttp(engine, opt) {
         if (POST) return sende(res, 200, { modelle: opt.router.setze(await lies(req), "admin") }), true;
         return sende(res, 200, { modelle: opt.router.status() }), true;
       }
+      if (r === "/system" || r.startsWith("/system/") || r === "/integrationen" || r.startsWith("/integrationen/")) {
+        if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true;
+        if (r === "/system" && !POST) return sende(res, 200, opt.system ? opt.system() : { pruefungen: [] }), true;
+        const rp = r.match(/^\/system\/reparatur\/([a-z]+)$/);
+        if (rp && POST) { if (!opt.reparatur) return sende(res, 503, { error: "nicht verfuegbar" }), true; return sende(res, 200, opt.reparatur(rp[1])), true; }
+        if (!opt.integrationen) return sende(res, 503, { error: "Integrationsverwaltung nicht verfuegbar" }), true;
+        if (r === "/integrationen" && !POST) return sende(res, 200, { integrationen: opt.integrationen.liste() }), true;
+        const im = r.match(/^\/integrationen\/([a-z]+)(\/test)?$/);
+        if (im && POST && im[2]) { await opt.integrationen.teste(im[1]); return sende(res, 200, { integration: opt.integrationen.oeffentlich(im[1]) }), true; }
+        if (im && POST) return sende(res, 200, { integration: opt.integrationen.setze(im[1], await lies(req), "admin") }), true;
+        return sende(res, 404, { error: "Unbekannt" }), true;
+      }
       if (r === "/openclaw") {
         if (w.rolle !== "admin") return sende(res, 403, { error: "Nur Betreiber" }), true;
         if (POST) return sende(res, 200, { openclaw: engine.openclawSetzen(await lies(req), "admin") }), true;

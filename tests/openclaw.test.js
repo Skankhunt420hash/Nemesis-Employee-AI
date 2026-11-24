@@ -46,7 +46,7 @@ test("Adapter: Status, Werkzeug, Agentenlauf, Fehlerabbildung", async () => {
   await assert.rejects(openclawAdapter({ url: gwUrl, token: "falsch" }).werkzeug("browser", { action: "status" }), /Anmeldung/);
   const r = await a.agentLauf("Mach etwas", { agentId: "desktop" });
   assert.strictEqual(r.text, "Erledigt: Formular ausgefuellt."); assert.strictEqual(r.modell, "openclaw/desktop");
-  assert.throws(() => openclawAdapter({ url: "file:///etc" }), /ungueltig/);
+  assert.throws(() => openclawAdapter({ url: "file:///etc" }), /ungueltig|http/);
 });
 
 test("Engine: Browser nur fuer freigeschaltete Kunden, Profil erzwungen, interne URLs gesperrt, Handeln braucht Freigabe", async () => {

@@ -295,32 +295,7 @@ function smtpSenden(cfg, mail) {
   });
 }
 
-/* ---------------------------------------------------------------------
-   Verschluesselung fuer Zugangsdaten
-   --------------------------------------------------------------------- */
-function tresor(dir) {
-  let key;
-  const env = process.env.NEMESIS_TRESOR_SCHLUESSEL || "";
-  if (/^[0-9a-f]{64}$/i.test(env)) key = Buffer.from(env, "hex");
-  else {
-    const f = path.join(dir, ".tresor-schluessel");
-    try { key = Buffer.from(fs.readFileSync(f, "utf8").trim(), "hex"); } catch (e) {}
-    if (!key || key.length !== 32) { key = crypto.randomBytes(32); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(f, key.toString("hex"), { mode: 0o600 }); }
-  }
-  return {
-    zu(text, kontext) {
-      const iv = crypto.randomBytes(12), c = crypto.createCipheriv("aes-256-gcm", key, iv);
-      c.setAAD(Buffer.from(String(kontext)));
-      const d = Buffer.concat([c.update(String(text), "utf8"), c.final()]);
-      return { v: 1, iv: iv.toString("base64"), tag: c.getAuthTag().toString("base64"), d: d.toString("base64") };
-    },
-    auf(o, kontext) {
-      const c = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(o.iv, "base64"));
-      c.setAAD(Buffer.from(String(kontext))); c.setAuthTag(Buffer.from(o.tag, "base64"));
-      return Buffer.concat([c.update(Buffer.from(o.d, "base64")), c.final()]).toString("utf8");
-    },
-  };
-}
+const { tresor } = require("./tresor.js");
 
 /* ---------------------------------------------------------------------
    Werkzeuge. art: lesen | schreiben | ausfuehren | destruktiv | extern
@@ -452,48 +427,7 @@ werkzeug("delegieren", { art: "ausfuehren", kategorie: "Team", timeoutMs: 6 * 36
    ist fuer Kunden nie sichtbar, das Gateway gehoert auf loopback/privates Netz. NEMESIS prueft eigene Rechte
    VOR jedem Aufruf; die OpenClaw-Policy ist eine zweite, unabhaengige Grenze.
    --------------------------------------------------------------------- */
-function openclawAdapter(cfg) {
-  const basis = String(cfg.url || "").replace(/\/+$/, "");
-  if (!/^https?:\/\/[^/]+$/.test(basis)) throw new Error("OpenClaw-URL ungueltig (z.B. http://127.0.0.1:18789)");
-  const kopf = () => Object.assign({ "Content-Type": "application/json" }, cfg.token ? { Authorization: "Bearer " + cfg.token } : {});
-  async function anfrage(methode, pfad, body, ms, signal) {
-    const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), ms || 60000);
-    if (signal) signal.addEventListener("abort", () => ctrl.abort(), { once: true });
-    try {
-      const r = await fetch(basis + pfad, { method: methode, headers: kopf(), body: body ? JSON.stringify(body) : undefined, signal: ctrl.signal });
-      const text = await r.text(); let j = null; try { j = JSON.parse(text); } catch (e) {}
-      return { status: r.status, j, text: kurz(text, 4000), retryAfter: r.headers.get("retry-after") };
-    } finally { clearTimeout(t); }
-  }
-  const fehlerText = (r) => {
-    const m = r.j && r.j.error ? (r.j.error.message || r.j.error.type || JSON.stringify(r.j.error)) : r.text;
-    return ({ 401: "Gateway-Anmeldung fehlgeschlagen (Token pruefen)", 403: "Von der OpenClaw-Policy blockiert", 404: "Werkzeug im Gateway nicht verfuegbar/erlaubt", 429: "Gateway bremst (Retry-After " + (r.retryAfter || "?") + ")" }[r.status] || "OpenClaw-Fehler " + r.status) + (m ? ": " + kurz(m, 300) : "");
-  };
-  return {
-    async status() {
-      const out = { url: basis };
-      try { const h = await anfrage("GET", "/healthz", null, 5000); out.live = h.status === 200; } catch (e) { out.live = false; out.fehler = e.message; }
-      try { const r = await anfrage("GET", "/readyz", null, 5000); out.bereit = r.status === 200; } catch (e) { out.bereit = false; }
-      return out;
-    },
-    async werkzeug(tool, args, o) {
-      o = o || {};
-      const body = { tool, args: args || {} };
-      if (o.sessionKey) body.sessionKey = o.sessionKey;
-      if (o.agentId) body.agentId = o.agentId;
-      if (o.idempotencyKey) body.idempotencyKey = o.idempotencyKey;
-      const r = await anfrage("POST", "/tools/invoke", body, o.ms || 120000, o.signal);
-      if (r.status === 200 && r.j && r.j.ok) return r.j.result;
-      throw new Error(fehlerText(r));
-    },
-    async agentLauf(text, o) {
-      o = o || {};
-      const r = await anfrage("POST", "/v1/chat/completions", { model: "openclaw/" + (o.agentId || "default"), messages: [{ role: "user", content: String(text) }], user: o.user }, o.ms || 900000, o.signal);
-      if (r.status === 200 && r.j && r.j.choices && r.j.choices[0]) return { text: String(r.j.choices[0].message && r.j.choices[0].message.content || ""), modell: r.j.model };
-      throw new Error(fehlerText(r));
-    },
-  };
-}
+const { adapter: openclawAdapter } = require("./integrationen/openclaw.js");
 async function oeffentlicheUrl(url) {
   let u; try { u = new URL(String(url)); } catch (e) { throw new Error("Ungueltige URL"); }
   if (!/^https?:$/.test(u.protocol)) throw new Error("Nur http/https erlaubt");
@@ -1232,6 +1166,7 @@ function createEngine(opt) {
 
   /* ---------- Neustart: offene Laeufe wieder aufnehmen ---------- */
   function wiederaufnehmen() {
+    setTimeout(() => { try { selbstheilung("neustart"); } catch (e) {} }, 0);
     for (const m of mandanten()) for (const k of laeufeListe(m.id)) {
       if (k.eltern) continue;
       if (k.status === "laeuft" || k.status === "wartet") einreihen(m.id, k.id);
@@ -1240,30 +1175,80 @@ function createEngine(opt) {
   }
 
   /* ---------- OpenClaw (nur Betreiber konfiguriert, pro Mandant freigeschaltet) ---------- */
+  // Konfiguration liegt in der Integrationsverwaltung (opt.integrationen); ohne sie (Tests) im eigenen global.json.
+  const IG = opt.integrationen || null;
+  if (IG && GLOBAL.openclaw && GLOBAL.openclaw.url && !IG.konfig("openclaw").url) {
+    try { // einmalige Uebernahme der alten Einstellung
+      const o = GLOBAL.openclaw;
+      IG.setze("openclaw", { url: o.url, aktiv: !!o.aktiv, token: o.token ? T.auf(o.token, "global:openclaw") : undefined, extra: { agentId: o.agentId || "", profilJeMandant: !!o.profilJeMandant, mandanten: o.mandanten || [] } }, "migration");
+      delete GLOBAL.openclaw; schreibJson(path.join(DIR, "global.json"), GLOBAL);
+    } catch (e) { console.warn("[agenten] OpenClaw-Migration: " + e.message); }
+  }
+  function ocKonfig() {
+    if (IG) { const k = IG.konfig("openclaw"); return { url: k.url, aktiv: k.aktiv, token: k.token, agentId: k.agentId || "", profilJeMandant: !!k.profilJeMandant, mandanten: Array.isArray(k.mandanten) ? k.mandanten : [] }; }
+    const o = GLOBAL.openclaw || {};
+    return { url: o.url || "", aktiv: !!o.aktiv, token: o.token ? T.auf(o.token, "global:openclaw") : "", agentId: o.agentId || "", profilJeMandant: !!o.profilJeMandant, mandanten: o.mandanten || [] };
+  }
   function openclawSetzen(b, akteur) {
-    const alt = GLOBAL.openclaw || {};
-    const neu = { url: String(b.url != null ? b.url : alt.url || "").trim(), aktiv: b.aktiv != null ? !!b.aktiv : !!alt.aktiv,
-      agentId: /^[A-Za-z0-9_-]{0,40}$/.test(String(b.agentId != null ? b.agentId : alt.agentId || "")) ? String(b.agentId != null ? b.agentId : alt.agentId || "") : "",
-      profilJeMandant: b.profilJeMandant != null ? !!b.profilJeMandant : !!alt.profilJeMandant,
-      mandanten: Array.isArray(b.mandanten) ? b.mandanten.filter((x) => TID_RE.test(x)) : alt.mandanten || [], token: alt.token || null };
+    const alt = ocKonfig();
+    const agentId = String(b.agentId != null ? b.agentId : alt.agentId || "");
+    const neu = { url: String(b.url != null ? b.url : alt.url || "").trim(), aktiv: b.aktiv != null ? !!b.aktiv : alt.aktiv,
+      agentId: /^[A-Za-z0-9_-]{0,40}$/.test(agentId) ? agentId : "", profilJeMandant: b.profilJeMandant != null ? !!b.profilJeMandant : alt.profilJeMandant,
+      mandanten: Array.isArray(b.mandanten) ? b.mandanten.filter((x) => TID_RE.test(x)) : alt.mandanten };
     if (neu.url) openclawAdapter({ url: neu.url }); // prueft Format
-    if (b.token === null || b.token === "") neu.token = null; else if (b.token) neu.token = T.zu(String(b.token), "global:openclaw");
-    GLOBAL.openclaw = neu; schreibJson(path.join(DIR, "global.json"), GLOBAL); try { fs.chmodSync(path.join(DIR, "global.json"), 0o600); } catch (e) {}
+    if (IG) IG.setze("openclaw", { url: neu.url, aktiv: neu.aktiv, token: b.token, extra: { agentId: neu.agentId, profilJeMandant: neu.profilJeMandant, mandanten: neu.mandanten } }, akteur);
+    else {
+      const g = Object.assign({}, neu, { token: (GLOBAL.openclaw || {}).token || null });
+      if (b.token === null || b.token === "") g.token = null; else if (b.token) g.token = T.zu(String(b.token), "global:openclaw");
+      GLOBAL.openclaw = g; schreibJson(path.join(DIR, "global.json"), GLOBAL); try { fs.chmodSync(path.join(DIR, "global.json"), 0o600); } catch (e) {}
+    }
     for (const t of neu.mandanten) { try { audit(t, akteur, "openclaw.konfiguriert", { url: neu.url, aktiv: neu.aktiv, agentId: neu.agentId }); } catch (e) {} }
     return openclawInfo();
   }
-  function openclawInfo() { const o = GLOBAL.openclaw || {}; return { url: o.url || "", aktiv: !!o.aktiv, agentId: o.agentId || "", profilJeMandant: !!o.profilJeMandant, mandanten: o.mandanten || [], tokenGesetzt: !!o.token }; }
+  function openclawInfo() { const o = ocKonfig(); return { url: o.url, aktiv: o.aktiv, agentId: o.agentId, profilJeMandant: o.profilJeMandant, mandanten: o.mandanten, tokenGesetzt: !!o.token }; }
   function openclaw(tid) {
-    const o = GLOBAL.openclaw || {};
-    if (!o.aktiv || !o.url) throw new Error("OpenClaw ist nicht eingerichtet (Betreiber: Zentrale > Kunden > OpenClaw)");
-    if (!(o.mandanten || []).includes(tid)) throw new Error("OpenClaw ist fuer diesen Kunden nicht freigeschaltet");
-    const adapter = (opt.openclawAdapter || openclawAdapter)({ url: o.url, token: o.token ? T.auf(o.token, "global:openclaw") : "" });
-    return { adapter, agentId: o.agentId || "", profil: o.profilJeMandant ? "nemesis-" + tid : "openclaw", sessionKey: (laufId) => "nemesis-" + tid + "-" + laufId };
+    const o = ocKonfig();
+    if (!o.aktiv || !o.url) throw new Error("OpenClaw ist nicht eingerichtet (Zentrale > Integrationen)");
+    if (!o.mandanten.includes(tid)) throw new Error("OpenClaw ist fuer diesen Kunden nicht freigeschaltet");
+    const adapter = (opt.openclawAdapter || openclawAdapter)({ url: o.url, token: o.token });
+    return { adapter, agentId: o.agentId, profil: o.profilJeMandant ? "nemesis-" + tid : "openclaw", sessionKey: (laufId) => "nemesis-" + tid + "-" + laufId };
   }
   async function openclawStatus() {
     const i = openclawInfo(); if (!i.url) return Object.assign(i, { live: false });
-    try { const o = GLOBAL.openclaw; return Object.assign(i, await openclawAdapter({ url: o.url, token: o.token ? T.auf(o.token, "global:openclaw") : "" }).status()); }
+    try { const o = ocKonfig(); return Object.assign(i, await openclawAdapter({ url: o.url, token: o.token }).status()); }
     catch (e) { return Object.assign(i, { live: false, fehler: e.message }); }
+  }
+
+  /* ---------- Selbstheilung: haengende/verwaiste Auftraege erkennen und reparieren ---------- */
+  function selbstheilung(akteur) {
+    const bericht = { zeit: iso(), neuEingereiht: [], verwaistGestoppt: [], kontingentWieder: [] };
+    const offen = (st) => ["laeuft", "wartet"].includes(st);
+    for (const m of mandanten()) {
+      const liste = laeufeListe(m.id), nachId = new Map(liste.map((x) => [x.id, x]));
+      for (const k of liste) {
+        if (aktive.has(k.id) || warteschlange.some((w) => w.id === k.id)) continue;
+        if (k.eltern) {
+          // Unteragent ohne laufenden Auftraggeber: verwaist (z.B. nach Neustart) -> stoppen statt doppelt arbeiten
+          const e = nachId.get(k.eltern);
+          if (offen(k.status) || k.status === "wartet_kontingent" || k.status === "wartet_freigabe") {
+            if (!e || !aktive.has(e.id)) { stoppe(m.id, k.id, akteur || "selbstheilung"); bericht.verwaistGestoppt.push(k.id); }
+          }
+          continue;
+        }
+        if (offen(k.status)) { einreihen(m.id, k.id); bericht.neuEingereiht.push(k.id); }
+        else if (k.status === "wartet_kontingent" && !kontingentWarter.has(k.id)) { const l = laufLaden(m.id, k.id); kontingentWarter.set(k.id, { tid: m.id, ab: l.weiterAb || jetzt() }); bericht.kontingentWieder.push(k.id); }
+      }
+      if (bericht.neuEingereiht.length + bericht.verwaistGestoppt.length) audit(m.id, akteur || "selbstheilung", "selbstheilung", { neuEingereiht: bericht.neuEingereiht.length, verwaistGestoppt: bericht.verwaistGestoppt.length });
+    }
+    letzteHeilung = bericht;
+    return bericht;
+  }
+  let letzteHeilung = null;
+  if (opt.heilIntervallMs) { const hu = setInterval(() => { try { selbstheilung("selbstheilung"); } catch (e) {} }, opt.heilIntervallMs); if (hu.unref) hu.unref(); }
+  function gesundheit() {
+    let laeufe = 0, freigaben = 0, kontingent = 0;
+    for (const m of mandanten()) for (const k of laeufeListe(m.id)) { if (["laeuft", "wartet"].includes(k.status)) laeufe++; if (k.status === "wartet_freigabe") freigaben++; if (k.status === "wartet_kontingent") kontingent++; }
+    return { aktiv: aktive.size, warteschlange: warteschlange.length, offeneLaeufe: laeufe, wartenAufFreigabe: freigaben, wartenAufKontingent: kontingent, notaus: !!GLOBAL.notaus, sandbox: sandbox.info(), letzteHeilung };
   }
 
   /* ---------- Export / Sicherung ---------- */
@@ -1307,7 +1292,7 @@ function createEngine(opt) {
     vorschauDatei,
     // intern fuer Werkzeuge
     _office, _officeAendern, _entwurfSenden, _gedaechtnis, _delegieren, _mandantDir: mDir,
-    openclaw, openclawSetzen, openclawInfo, openclawStatus,
+    openclaw, openclawSetzen, openclawInfo, openclawStatus, selbstheilung, gesundheit,
     VORLAGEN, MODI, MODUS_TEXT, ARTEN, AUTONOMIE,
     werkzeugKatalog: () => Object.values(werkzeuge).map((w) => ({ braucht: w.braucht || null, name: w.name, art: w.art, kategorie: w.kategorie, text: w.text, liestFremdes: !!w.liestFremdes, immerFreigabe: !!w.immerFreigabe, timeoutSek: Math.round(w.timeoutMs / 1000) })),
   };
