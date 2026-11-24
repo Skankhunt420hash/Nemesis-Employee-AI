@@ -1,75 +1,64 @@
-# Architektur NEMESIS Employee: Ist-Zustand und verbindliche Zielarchitektur
+# Architektur NEMESIS Employee (Stand 24.11.2026, Masterplan V1.0)
 
-## 1. Ist-Zustand
-
+## 1. Laufzeit-Überblick
 ```
-Internet ──HTTPS──> Caddy ──> nemesis-sync.js (:3400, ein Node-Prozess)
-                               ├─ nemesis-serve.js  schutz() + oeffentlicher Kunden-Chat /api/chat, /a/<id>  (Claude → Rotator)
-                               ├─ nemesis-import.js Website-Import
-                               ├─ nemesis-app.js    behandle(): /app /llm /bg /telegram /apps /x /b /betrieb /welt /schluessel /pay /zentrale
-                               │    ├─ rotiere()        Modell-Rotator (gratis zuerst, OpenAI zuletzt)
-                               │    ├─ bg*              Hintergrund-Auftraege (Code-Schmiede, alte Missionen)
-                               │    ├─ tg*              Telegram (eigene Werkzeuge)
-                               │    ├─ b*               Betriebe (eigene Werkzeuge, Gast-Chat)
-                               │    ├─ runtime.js       generierte Apps (/x), logic.js im isolierten Kindprozess
-                               │    └─ AGENTEN_SRC      Zentrale: engine.js + http.js + zentrale.html (eingebettet)
-                               └─ /state?raum=      Lab-Zustand (Agenten als JSON)
-Browser: nemesis-app.html (Lab, React ohne Build) · zentrale.html (Zentrale) · betrieb-seiten/*
-Daten:   sync-data/*.json, sync-data/_agenten/mandanten/<id>/...
-Deploy:  install-app.sh (eingebettete Dateien) + Selbst-Update alle 30 Minuten von GitHub main
-```
+Smartphone / Browser
+  ├─ Nemesis Lab           /k/<Zugang>/app        (app/nemesis-app.html, React ohne Build)
+  └─ Command Center        /k/<Zugang>/zentrale   (app/agenten/zentrale.html)
+          │ HTTPS (Caddy)
+          ▼
+nemesis-sync.js (:3400, ein Node-Prozess, Installer: build/*)
+  ├─ nemesis-serve.js      schutz(), oeffentlicher Kunden-Chat /api/chat (Claude nur mit Freigabe)
+  ├─ nemesis-import.js     Website-Import
+  └─ nemesis-app.js        behandle(): /app /llm /bg /telegram /apps /x /b /betrieb /welt /schluessel /pay /zentrale
+       ├─ rotiere()                Modell-Transport (HTTP zu den Anbietern)  ──► Kosten-Gate modelle/router.js
+       ├─ Betriebe, Telegram, Code-Schmiede (bg), Welt, Stripe   (bestehend, unveraendert)
+       ├─ systemStatus()/systemReparatur()   echte Messwerte, Reparaturen
+       └─ AGENTEN_SRC (eingebettet, agRequire):
+            engine.js            Runtime/Orchestrator-Kern: Mitarbeiter, Laeufe, Werkzeuge, Rechte, Freigaben,
+                                 Delegation, Notaus, Audit, Office, Sandbox, Selbstheilung
+            http.js              API /zentrale/api (Rollen: Betreiber/Kunde)
+            modelle/router.js    Anbieter-Registry, Kostenklassen, FREE MODE, Freigaben, Kontingente
+            integrationen/       index (Verwaltung) · basis · omniroute · openhands · openclaw
+            tresor.js            AES-256-GCM
+Daten: sync-data/ (JSON-Dateien; _agenten/, _modelle.json, _integrationen.json, Betriebe, Welt, Telegram, Apps)
 
-Kernprobleme der Architektur:
-1. **Vier Agenten- und Werkzeug-Welten** (Lab, Telegram, Betrieb, Zentrale) mit eigenen Rechte-Modellen.
-2. **Der Modellzugang hat kein Kosten-Gate**: Ein vorhandener Schlüssel wird automatisch genutzt; OpenAI und Claude stehen als Fallback in den Ketten.
-3. **Ein Prozess für alles**: Server, Agenten, Sandbox-Steuerung und öffentliche Endpunkte teilen sich einen Node-Prozess mit Docker-Zugriff.
-4. **Deploy = Push auf `main`**, ohne Signatur.
-
-## 2. Zielarchitektur (verbindlich für alle Phasen)
-
-Grundsatz: **Es gibt keine zweite Plattform.** Die vorhandene Zentrale-Engine (`app/agenten/`) wird schrittweise zur **Universal Agent Runtime** ausgebaut. Lab, Telegram und Betriebe werden zu **Kanälen** und **Werkzeug-Paketen** dieser Runtime, statt eigene Agenten zu führen.
-
-```
-app/agenten/
-  kern/          Universal Agent Runtime: Laeufe, Schleife, Plan, Validierung, Pause/Resume/Stop,
-                 Limits, Freigaben, Delegation, Ereignisse
-  modelle/       Provider-Registry + Router + Kosten-Gate  ✅ router.js (Phase 1). rotiere() bleibt der
-                 Transport (HTTP zu den Anbietern) und fragt fuer jeden Kandidaten das Gate.
-  werkzeuge/     Tool-Registry: ausfuehrbare Werkzeuge mit Manifest (art, rechte, timeout, umgebung,
-                 version), gruppiert in Pakete (dateien, coding, office, web, browser, medien,
-                 betrieb, telegram ...)
-  skills/        Prompt-Skills (reine Anleitungen/Personas), klar getrennt von Werkzeugen
-  arbeitsbereiche/  Workspaces, Sandbox-Treiber (docker | aus), Vorschau, Artefakte
-  mandanten/     Organisationen, Benutzer, Rollen, Tokens, Lizenzen, Limits, Tresor, Audit
-  training/      Datensaetze, Jobs, Adapter, Evaluation, Worker-Schnittstelle (separat)
-  kanaele/       zentrale (UI/API), telegram, betrieb-gast, kunden-chat, webhook/ereignisse
-  http.js        API-Fassade
-  zentrale.html  UI (mobil zuerst)
+Externe Engines (einzeln aktivierbar, lokal oder auf einem Worker-PC):
+  OmniRoute  :20128  /v1 (OpenAI-kompatibel)      ── Modelle fuer NEMESIS, OpenHands, OpenClaw (ab Phase 2)
+  OpenHands  :8000   Agent Server REST            ── Code-Auftraege (ab Phase 3)
+  OpenClaw   :18789  Gateway (tools/invoke, v1)   ── Automationen/Browser (ab Phase 4)
 ```
 
-### Verbindliche Regeln
+## 2. Schichten und Verantwortung
+| Schicht | Modul | Verantwortung | Austauschbar über |
+|---|---|---|---|
+| Oberfläche | `zentrale.html`, `nemesis-app.html` | Command Center (mobil zuerst), Lab | – |
+| API | `http.js` | Rollenprüfung, Mandantengrenze, Routen | – |
+| Orchestrator/Runtime | `engine.js` | Aufträge (Zustände), Plan → Werkzeug → Ergebnis → Prüfung, Freigaben, Delegation, Limits, Notaus, Selbstheilung | – |
+| Modelle | `modelle/router.js` + `rotiere()` | FREE MODE, Kosten-Gate, Rotation, Kontingente | Anbieter-Registry; OmniRoute als zusätzlicher Anbieter (Phase 2) |
+| Ausführung | Werkzeug-Registry in `engine.js`, Docker-Sandbox | Dateien, Terminal, Build, Tests, Git, Web, Office | Werkzeug-Pakete; OpenHands (Phase 3), OpenClaw (Phase 4) |
+| Integrationen | `integrationen/*` | Verbindung, Status, Konfiguration, Tests der externen Engines | ein Modul pro Engine (`META` + `adapter(cfg)`) |
+| Sicherheit | `entscheide()`, `tresor.js`, Audit, SSRF-Schutz, Sandbox | siehe [SECURITY.md](SECURITY.md) | – |
+
+## 3. Verbindliche Architekturregeln
 | # | Regel |
 |---|---|
-| A1 | Jede KI-Anfrage aus jedem Kanal läuft über `modelle/router`. Das **Kosten-Gate liegt auf dem Server**: kostenpflichtige Modelle nur, wenn der Admin sie **ausdrücklich** freigegeben hat (pro Modell, mit Budget). Ein vorhandener Schlüssel ist keine Freigabe. Free-only ist Standard. **Kein automatischer Fallback auf bezahlte Modelle.** Sind die Gratis-Kontingente erschöpft, pausiert der Lauf (`wartet_kontingent`). |
-| A2 | Jede Aktion eines Agenten ist ein Werkzeug aus der Registry. Rechte prüft ausschließlich `entscheide()` bei jeder Ausführung. Werkzeuge haben ein Manifest; Werkzeuge ohne verfügbare Ausführungsumgebung sind **deaktiviert**, nicht simuliert. |
-| A3 | Code von Agenten oder Kunden läuft **nie** im Server-Prozess, sondern nur in der Sandbox (Docker: ohne Netz, cap-drop, Limits) oder in isolierten Kindprozessen. Ohne Sandbox: gesperrt. |
-| A4 | Mandant ist die oberste Grenze: eigene Ordner, Secrets, Workspaces, Agenten, Lizenzen. Jede API-Anfrage und jedes Werkzeug ist an genau einen Mandanten gebunden. Delegation und Agenten-Nachrichten nur innerhalb des Mandanten und der freigegebenen Teams. |
-| A5 | Externe Harnesses (OpenClaw, OpenCode, ComfyUI, Training-Worker) werden **nur über Adapter** und nur über offiziell dokumentierte Schnittstellen angebunden. Pro Kunde gibt es eine eigene isolierte Instanz oder eine dokumentierte Trennung; eine OpenClaw-Gateway-Instanz für mehrere Kunden ist **nicht** erlaubt. |
-| A6 | Speicherung hinter einer Speicher-Schnittstelle (`speicher.lesen/schreiben/liste`). Zuerst JSON-Dateien wie heute; ein Wechsel auf SQLite ist in Phase 9 möglich, ohne die Fachlogik zu ändern. |
-| A7 | Keine neuen Laufzeit-Abhängigkeiten im Server ohne Begründung (heute: null Abhängigkeiten). Schwere Komponenten (OpenCode, ComfyUI, Training) laufen als **eigene Dienste/Container** und nicht im Server-Prozess. |
-| A8 | Deploy nur bewusst: Auto-Update wird abgesichert (Phase 0 → Phase 9), bis dahin gilt: **Merge auf `main` = Deploy**. |
-| A9 | Jede Fähigkeit ist mit Status gekennzeichnet (Manifest-Feld `status`: verfügbar/blockiert/ungetestet), und die UI zeigt ihn an. |
-| A10 | Mobil zuerst: Jede neue UI-Funktion muss bei 375 px Breite ohne horizontales Scrollen bedienbar sein (Playwright-Prüfung in den Tests). |
+| A1 | Jede KI-Anfrage läuft durch das Kosten-Gate (`router.pruefe`). FREE MODE ist Standard. Kein automatischer Bezahl-Fallback. Unbekannter Preis = gesperrt. |
+| A2 | Jede Aktion eines Mitarbeiters ist ein registriertes Werkzeug; Rechte prüft nur `entscheide()` bei jeder Ausführung. Nicht verfügbare Werkzeuge sind deaktiviert, nicht simuliert. |
+| A3 | Agenten- oder Kundencode läuft nie im Server-Prozess (Docker-Sandbox, isolierte Kindprozesse, externe Engine auf einem Worker). |
+| A4 | Mandant = oberste Datengrenze (heute ein Betreiber + optionale Pilotkunden). |
+| A5 | Externe Engines nur über `integrationen/<name>.js` und nur über dokumentierte Endpunkte; Version, Lizenz und Quelle in `META` und in INTEGRATIONS.md. Kein Zugriff auf Engine-Interna an anderer Stelle. |
+| A6 | Datenspeicher: JSON-Dateien hinter Modul-Funktionen; ein Wechsel auf SQLite (Phase 5, „zentrale Datenbank“) ändert nur die Speicherfunktionen. |
+| A7 | Keine Laufzeit-Abhängigkeiten im Server (Node ≥ 18). Schwere Systeme (OmniRoute, OpenHands, OpenClaw) laufen als eigene Prozesse/Dienste. |
+| A8 | Deploy nur bewusst: Merge auf `main` = Deploy (Selbst-Update). |
+| A9 | Jede Fähigkeit zeigt ihren echten Status (aus/ok/warnung/fehler/blockiert) in der UI. |
+| A10 | Mobil zuerst (375 px ohne horizontales Scrollen, alle Bereiche erreichbar). |
 
-### Build und Auslieferung
-Die Module in `app/agenten/**` werden von `build/einbetten.py` zu `AGENTEN_SRC.module` gebündelt; `agRequire()` in `nemesis-app.js` löst relative `require`-Aufrufe innerhalb dieser Module auf (seit Phase 1). Damit bleiben Installer und Selbst-Update kompatibel. Tests laden die Module direkt.
+## 4. Build und Auslieferung
+`build/einbetten.py` bettet `app/agenten/**/*.js` + `zentrale.html` als `AGENTEN_SRC` und `app/laufzeit/runtime.js` in `app/nemesis-app.js` ein. `agRequire()` löst relative `require`-Aufrufe zwischen den Modulen auf. `build/build.sh` erzeugt daraus `install-app.sh`. Tests laden die Module direkt aus `app/`.
 
-### Abhängigkeiten der Phasen
+## 5. Phasen-Abhängigkeiten (V1.0)
 ```
-P0 Audit ─> P1 Modell-Router ─> P2 Runtime-Kern ─┬─> P3 Development Engine ─┐
-                                                 ├─> P4 Skill/Tool-Registry ─┼─> P5 Company OS ─┐
-                                                 │                          └─> P6 Skill Forge ─┤
-                                                 └─> (P1+P4) P7 Training Lab (separat, Hardware-blockiert)
-                                                                            P8 Marketplace <─┘ (braucht P4, P5, Mandanten aus P2)
-                                                                            P9 Produktionsreife (zuletzt)
+P1 Foundation ─► P2 OmniRoute ─► P3 OpenHands ─► P4 OpenClaw (+Bruecke zu OpenHands) ─► P5 Orchestrator/Command Center
+                                                                                         ─► P6 Evolution Engine ─► P7 Employee Genesis ─► P8 Digital Company ─► End-to-End-Test
 ```

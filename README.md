@@ -5,7 +5,9 @@ Nemesis Lab (Agent-Generator-App) + Backend auf dem Droplet.
 ## NEMESIS Zentrale: handlungsfähige Agenten (neu)
 Agenten mit echten Werkzeugen (Dateien, Docker-Sandbox für Build/Test/Git, Web, Office, OpenClaw-Browser), Rechten pro Werkzeug, Freigabe-Center, Live-Monitor, Notaus, Audit-Log, Kunden (Mandanten) und NEMESIS Office.
 - Betreiber: `/k/<Zugang>/zentrale`, Kunde: `/zentrale` mit Token
-- Doku: [`docs/ZENTRALE.md`](docs/ZENTRALE.md), Audit: [`docs/AUDIT.md`](docs/AUDIT.md), Tests: [`docs/TESTBERICHT.md`](docs/TESTBERICHT.md)
+- Plan und Stand: [`docs/MASTERPLAN.md`](docs/MASTERPLAN.md) · [`docs/PROGRESS.md`](docs/PROGRESS.md) · Regeln: [`CLAUDE.md`](CLAUDE.md)
+- Technik: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) · [`docs/SECURITY.md`](docs/SECURITY.md) · [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+- Tests: [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) · Bedienung: [`docs/ZENTRALE.md`](docs/ZENTRALE.md) · Änderungen: [`docs/CHANGELOG.md`](docs/CHANGELOG.md)
 - Tests: `npm test` · Bauen: `npm run build`
 - **Achtung:** Der Server aktualisiert sich alle 30 Minuten selbst von `main`. Ein Merge auf `main` ist ein Deploy.
 

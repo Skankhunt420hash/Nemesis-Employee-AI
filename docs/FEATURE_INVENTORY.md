@@ -1,4 +1,6 @@
-# Feature-Inventar NEMESIS Employee (Phase 0, Stand 22.11.2026)
+# Feature-Inventar NEMESIS Employee (Stand 22.11.2026, ergänzt 24.11.2026)
+
+> Aktueller Gesamtstand: [PROGRESS.md](PROGRESS.md). Neu seit 24.11.: Integrationsverwaltung (OmniRoute ✅ echt getestet, OpenHands ✅ echt getestet, OpenClaw ⛔ nur Vertrag), Systemstatus, Selbstheilung.
 
 Branch `ccr-45791acd-iy1q1j` (Entwicklungsbranch; `main` ist unverändert und entspricht der Produktion).
 
