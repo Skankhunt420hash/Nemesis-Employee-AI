@@ -204,15 +204,15 @@ const SEITEN = [
 ];
 function nav() {
   const fr = (S.daten.uebersicht && S.daten.uebersicht.freigaben) || 0;
-  const liste = SEITEN.concat(S.ich && S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"], ["modelle", "⚡", "Modelle & Kosten"]] : []);
+  const liste = SEITEN.concat(S.ich && S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"], ["modelle", "⚡", "Modelle & Kosten"], ["integrationen", "⧉", "Integrationen"], ["system", "♥", "Systemstatus"]] : []);
   const knopf = (s, kl) => `<button class="${S.seite === s[0] ? "an" : ""}" data-seite="${s[0]}"><span class="ic">${s[1]}</span>${kl ? "" : ""}${esc(s[2])}${s[0] === "freigaben" && fr ? `<span class="zahl">${fr}</span>` : ""}</button>`;
   return `<nav class="seite"><div class="marke"><svg width="30" height="30" viewBox="0 0 64 64"><path d="M32 6 L58 32 L32 58 L6 32 Z" fill="none" stroke="#FF2D78" stroke-width="5"/><path d="M32 20 L44 32 L32 44 L20 32 Z" fill="#22E0FF"/></svg><div>NEMESIS<small>ZENTRALE</small></div></div>
     ${liste.map((s) => knopf(s)).join("")}
     <div class="fuss">${S.ich ? (S.ich.rolle === "admin" ? "Betreiber" : "Kunde") + " · Engine " + esc(S.ich.version) : ""}<br>Sandbox: ${S.ich ? esc(S.ich.sandbox.modus) : "–"}${TOKEN ? '<br><a href="#" id="abmelden">Abmelden</a>' : ""}</div></nav>
-  <div class="unten">${liste.slice(0, 7).map((s) => `<button class="${S.seite === s[0] ? "an" : ""}" data-seite="${s[0]}"><span class="ic">${s[1]}</span>${esc(s[2])}${s[0] === "freigaben" && fr ? `<span class="zahl">${fr}</span>` : ""}</button>`).join("")}</div>`;
+  <div class="unten">${liste.slice(0, 4).map((s) => `<button class="${S.seite === s[0] ? "an" : ""}" data-seite="${s[0]}"><span class="ic">${s[1]}</span>${esc(s[2])}${s[0] === "freigaben" && fr ? `<span class="zahl">${fr}</span>` : ""}</button>`).join("")}<button class="${liste.slice(4).some((x) => x[0] === S.seite) ? "an" : ""}" data-mehr><span class="ic">☰</span>Mehr</button></div>`;
 }
 function mandantWahl() {
-  if (!S.ich || S.ich.rolle !== "admin" || S.seite === "modelle") return "";
+  if (!S.ich || S.ich.rolle !== "admin" || ["modelle", "integrationen", "system"].includes(S.seite)) return "";
   return `<select class="mandantwahl" id="tidwahl">${S.mandanten.length ? "" : "<option>– kein Kunde –</option>"}${S.mandanten.map((m) => `<option value="${esc(m.id)}" ${m.id === S.tid ? "selected" : ""}>${esc(m.name)}${m.politik && m.politik.demo ? " · Demo" : ""}</option>`).join("")}</select>`;
 }
 function kopf(titel, unter, rechts) { return `<div class="kopf"><div><h1>${titel}</h1>${unter ? `<p>${unter}</p>` : ""}</div><div class="rechts">${rechts || ""}${mandantWahl()}</div></div>`; }
@@ -223,7 +223,7 @@ async function zeichne() {
   if (!S.ich) return;
   let inhalt = "";
   try {
-    if (!["mandanten", "modelle"].includes(S.seite) && !S.tid) inhalt = kopf("Willkommen") + `<div class="karte leer">Noch kein Kunde angelegt. ${S.ich.rolle === "admin" ? '<br><br><button class="knopf pri" data-seite="mandanten">Ersten Pilotkunden anlegen</button>' : ""}</div>`;
+    if (!["mandanten", "modelle", "integrationen", "system"].includes(S.seite) && !S.tid) inhalt = kopf("Willkommen") + `<div class="karte leer">Noch kein Kunde angelegt. ${S.ich.rolle === "admin" ? '<br><br><button class="knopf pri" data-seite="mandanten">Ersten Pilotkunden anlegen</button>' : ""}</div>`;
     else inhalt = await (SEITE[S.seite] || SEITE.uebersicht)();
   } catch (e) { inhalt = kopf("Fehler") + `<div class="hinweis rot">${esc(e.message)}</div>`; }
   const notaus = S.ich.notaus ? `<div class="notaus"><b>⛔ NOTAUS AKTIV</b><span class="mut">Alle Agenten sind gestoppt, neue Aufträge gesperrt.</span>${S.ich.rolle === "admin" ? '<button class="knopf klein" id="notausAus" style="margin-left:auto">Notaus aufheben</button>' : ""}</div>` : "";
@@ -507,6 +507,38 @@ SEITE.modelle = async () => {
   <div class="karte"><h3>Protokoll</h3>${m.protokoll.length ? m.protokoll.map((p) => `<div class="klein" style="padding:4px 0;border-bottom:1px solid var(--linie)"><span class="mono mut">${zeit(p.t)}</span> ${esc(p.akteur)} · <b>${esc(p.aktion)}</b> <span class="mut mono">${esc(JSON.stringify(p.d)).slice(0, 160)}</span></div>`).join("") : '<div class="mut">Noch leer.</div>'}</div></div>`;
 };
 
+const AMPEL = { ok: ["ok", "Verbunden"], warnung: ["warn", "Warnung"], fehler: ["err", "Fehler"], aus: ["", "Deaktiviert"], nicht_konfiguriert: ["warn", "Nicht eingerichtet"], ungeprueft: ["", "Noch nicht geprüft"] };
+const ampel = (s) => { const [k, t] = AMPEL[s] || ["", s]; return `<span class="chip ${k}"><span class="punkt"></span>${esc(t)}</span>`; };
+SEITE.integrationen = async () => {
+  S.auto = 0;
+  if (S.ich.rolle !== "admin") return kopf("Kein Zugriff");
+  const l = (await api("/integrationen")).integrationen;
+  return kopf("Integrationen", "Externe Engines: einzeln einschalten, testen, austauschen. Adresse kann auch ein separater Worker-PC sein.") + l.map((i) => {
+    const t = i.letzterTest;
+    return `<div class="karte" style="margin-bottom:14px"><h3>${esc(i.name)} ${ampel(i.status)}<span class="mut klein" style="margin-left:auto;font-weight:400">Lizenz ${esc(i.lizenz)} · getestet mit ${esc(i.getestetMit)}</span></h3>
+    <div class="mut">${esc(i.rolle)}</div>
+    ${t ? `<div class="hinweis ${t.status === "ok" ? "cy" : t.status === "fehler" ? "rot" : ""}" style="margin-top:10px"><b>${esc(t.meldung)}</b>${t.hilfe ? `<br>${esc(t.hilfe)}` : ""}<div class="mono klein" style="margin-top:6px">${(t.schritte || []).map((x) => (x.ok ? "✓ " : "✗ ") + esc(x.name) + ": " + esc(x.info)).join("<br>")}</div>${t.modelle ? `<div class="klein" style="margin-top:6px">Katalog: ${t.modelle.gesamt} Modelle · ${t.modelle.gratis} mit Preis 0 · ${t.modelle.kostenpflichtig} kostenpflichtig · ${t.modelle.unbekannt} ohne Preis (gesperrt)</div>` : ""}<div class="mut klein">Geprüft ${zeit(t.zeit)}</div></div>` : ""}
+    <div class="raster r2"><div><label class="f">Adresse</label><input class="e" data-igurl="${i.id}" value="${esc(i.url)}" placeholder="${esc(i.standardUrl)}"></div>
+    <div><label class="f">${esc((i.felder.find((f) => f.id === "token") || {}).name || "Schlüssel")} ${i.tokenGesetzt ? '<span class="chip ok">gespeichert</span>' : ""}</label><input class="e" type="password" autocomplete="new-password" data-igtok="${i.id}" placeholder="${i.tokenGesetzt ? "unverändert lassen" : ""}"></div></div>
+    <div class="zeile" style="margin-top:12px"><button class="knopf pri" data-igspeichern="${i.id}">Speichern</button><button class="knopf" data-igtest="${i.id}">Verbindung testen</button>
+    <button class="knopf ${i.aktiv ? "gefahr" : "cy"}" data-igschalt="${i.id}" data-an="${i.aktiv ? 0 : 1}">${i.aktiv ? "Deaktivieren" : "Aktivieren"}</button></div>
+    <details style="margin-top:10px"><summary class="mut klein" style="cursor:pointer">Installation & Start</summary><pre class="code">${esc(i.start)}</pre><a class="klein" href="${esc(i.quelle)}" target="_blank" rel="noopener">${esc(i.quelle)}</a></details></div>`;
+  }).join("");
+};
+SEITE.system = async () => {
+  S.auto = 15000;
+  if (S.ich.rolle !== "admin") return kopf("Kein Zugriff");
+  const st = await api("/system");
+  const farbe = { ok: "ok", warnung: "warn", fehler: "err" };
+  const h = st.gesundheit && st.gesundheit.letzteHeilung;
+  return kopf("Systemstatus", "Echte Messwerte. Alle 2 Minuten repariert die Selbstheilung hängende Aufträge automatisch.") +
+  `<div class="karte"><table class="t mobil"><tbody>${st.pruefungen.map((p) => `<tr><td style="width:30%"><b>${esc(p.name)}</b></td><td><span class="chip ${farbe[p.status]}"><span class="punkt"></span>${esc(p.status)}</span></td><td>${esc(p.info)}${p.hilfe && p.status !== "ok" ? `<div class="mut klein">${esc(p.hilfe)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
+  <div class="mut klein" style="margin-top:8px">Server-Version ${esc(st.version)} · läuft seit ${Math.round(st.laufzeitSek / 60)} min · Stand ${zeit(st.zeit)}</div></div>
+  <div class="karte" style="margin-top:14px"><h3>Selbstheilung & Reparatur</h3>
+  ${h ? `<div class="mut klein">Letzter Lauf ${zeit(h.zeit)}: ${h.neuEingereiht.length} neu eingereiht, ${h.verwaistGestoppt.length} verwaiste Unteraufträge gestoppt</div>` : ""}
+  <div class="zeile" style="margin-top:10px"><button class="knopf" data-rep="auftraege">Hängende Aufträge jetzt reparieren</button><button class="knopf" data-rep="pausen">Anbieter-Pausen zurücksetzen</button><button class="knopf" data-rep="modelllisten">Modell-Listen neu laden</button></div></div>`;
+};
+
 /* ================= Dialoge ================= */
 function modal(html) { const d = document.createElement("div"); d.className = "modal"; d.innerHTML = `<div class="in">${html}</div>`; d.addEventListener("click", (e) => { if (e.target === d || e.target.closest("[data-zu]")) d.remove(); }); document.body.appendChild(d); return d; }
 async function neuerAuftrag(agentId) {
@@ -542,6 +574,12 @@ function binde() {
       if (d.lauf) return geh("auftraege", { laufId: d.lauf });
       if (d.agent) return geh("agenten", { agentId: d.agent, tab: "" });
       if (d.tidwahl) { S.tid = d.tidwahl; merkeUi(); await laden(); return geh("uebersicht"); }
+      if ("mehr" in d) {
+        const liste = SEITEN.concat(S.ich.rolle === "admin" ? [["mandanten", "⌂", "Kunden"], ["modelle", "⚡", "Modelle & Kosten"], ["integrationen", "⧉", "Integrationen"], ["system", "♥", "Systemstatus"]] : []);
+        const md = modal(`<h2 style="margin-top:0">Alle Bereiche</h2><div class="raster" style="grid-template-columns:1fr 1fr;gap:8px">${liste.map((x) => `<button class="knopf" style="justify-content:flex-start;padding:14px" data-mseite="${x[0]}"><span>${x[1]}</span> ${esc(x[2])}</button>`).join("")}</div><div style="text-align:right;margin-top:12px"><button class="knopf" data-zu>Schliessen</button></div>`);
+        md.querySelectorAll("[data-mseite]").forEach((b) => b.onclick = () => { md.remove(); geh(b.dataset.mseite, { laufId: "", agentId: "", tab: "" }); });
+        return;
+      }
       if ("neuagent" in d) { ENTWURF = null; return geh("agenten", { agentId: "neu", tab: "" }); }
       if ("neuauftrag" in d) return neuerAuftrag(d.neuauftrag);
       if ("zurueck" in d) { ENTWURF = null; return geh(S.seite, { laufId: "", agentId: "" }); }
@@ -565,6 +603,10 @@ function binde() {
       if ("smtp" in d) { await mApi("/smtp", { smtp: { host: $("#smHost").value, port: +$("#smPort").value, benutzer: $("#smUser").value, passwort: $("#smPw").value || undefined, von: $("#smVon").value, vonName: $("#smName").value } }); toast("SMTP gespeichert"); await laden(); return zeichne(); }
       if ("limitsspeichern" in d) { const l = {}; document.querySelectorAll("[data-mlimit]").forEach((i) => l[i.dataset.mlimit] = +i.value); await mApi("/einstellungen", { limits: l }); toast("Limits gespeichert"); return zeichne(); }
       if (d.nmv || d.ocm) { t.classList.toggle("an"); return; }
+      if (d.igspeichern) { const id = d.igspeichern, b = { url: $(`[data-igurl="${id}"]`).value.trim() }; const tk = $(`[data-igtok="${id}"]`).value; if (tk) b.token = tk; await api("/integrationen/" + id, b); toast("Gespeichert"); return zeichne(); }
+      if (d.igtest) { t.disabled = true; t.textContent = "Teste…"; await api("/integrationen/" + d.igtest + "/test", {}); return zeichne(); }
+      if (d.igschalt) { await api("/integrationen/" + d.igschalt, { aktiv: d.an === "1" }); if (d.an === "1") await api("/integrationen/" + d.igschalt + "/test", {}); return zeichne(); }
+      if (d.rep) { const r = await api("/system/reparatur/" + d.rep, {}); toast(typeof r.bericht === "string" ? r.bericht : (r.bericht.neuEingereiht.length + " neu eingereiht, " + r.bericht.verwaistGestoppt.length + " verwaist gestoppt")); return zeichne(); }
       if (d.mschalt) { await api("/modelle", { schalten: { anbieter: d.mschalt, aus: d.aus === "1" } }); return zeichne(); }
       if (d.mbest) { const n = prompt("Wie hast du geprüft, dass " + d.mbest + " für dieses Konto keine API-Kosten verursacht? (z.B. 'Groq-Konto ohne Zahlungsmittel, Free Tier, 22.11.')"); if (n) { await api("/modelle", { bestaetigen: { anbieter: d.mbest, notiz: n } }); toast("Bestätigt"); zeichne(); } return; }
       if (d.mbzurueck) { await api("/modelle", { bestaetigen: { anbieter: d.mbzurueck, zuruecknehmen: true } }); return zeichne(); }
